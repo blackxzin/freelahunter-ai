@@ -16,6 +16,7 @@ from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -80,6 +81,16 @@ def hunter_environment(platform: PlatformRuntime, base: dict[str, str] | None = 
     return env
 
 
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def request_allowed(host: str | None, origin: str | None) -> bool:
+    """Reject DNS-rebinding and cross-site requests aimed at the local panel."""
+    if urlsplit(f"//{host or ''}").hostname not in LOCAL_HOSTS:
+        return False
+    return origin is None or urlsplit(origin).netloc == host
+
+
 def hunter_command(root: str | Path = ROOT) -> list[str]:
     """Build the process command without invoking a shell."""
     return ["node", str(Path(root) / "scripts" / "interactive_hunt.mjs")]
@@ -134,6 +145,8 @@ class HunterProcessManager:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 bufsize=1,
                 start_new_session=True,
             )
@@ -282,13 +295,19 @@ setInterval(refresh, 2500); refresh();
 def create_operator_app(manager: HunterProcessManager | None = None):
     try:
         from fastapi import FastAPI, HTTPException
-        from fastapi.responses import HTMLResponse
+        from fastapi.responses import HTMLResponse, JSONResponse
     except ImportError:
         return None
 
     controller = manager or HunterProcessManager()
     app = FastAPI(title="FreelaHunter Operator Panel")
     app.state.hunter_manager = controller
+
+    @app.middleware("http")
+    async def local_only(request, call_next):
+        if not request_allowed(request.headers.get("host"), request.headers.get("origin")):
+            return JSONResponse({"detail": "forbidden"}, status_code=403)
+        return await call_next(request)
 
     @app.get("/", response_class=HTMLResponse)
     def index():
@@ -351,6 +370,8 @@ def serve_operator_panel(host: str = "127.0.0.1", port: int = 8765,
             self.wfile.write(body)
 
         def do_GET(self):  # noqa: N802 - BaseHTTPRequestHandler API
+            if not request_allowed(self.headers.get("Host"), self.headers.get("Origin")):
+                return self._send({"detail": "forbidden"}, 403)
             path = urlparse(self.path).path
             if path == "/":
                 self._send(_page(controller.platforms), content_type="text/html")
@@ -362,6 +383,8 @@ def serve_operator_panel(host: str = "127.0.0.1", port: int = 8765,
                 self._send({"detail": "not found"}, 404)
 
         def do_POST(self):  # noqa: N802 - BaseHTTPRequestHandler API
+            if not request_allowed(self.headers.get("Host"), self.headers.get("Origin")):
+                return self._send({"detail": "forbidden"}, 403)
             path = urlparse(self.path).path
             try:
                 if path.startswith("/api/start/"):

@@ -10,6 +10,8 @@ from freelahunter.quoting import build_quote
 
 
 def main() -> None:
+    # Node pipes UTF-8; Windows would otherwise decode it with the ANSI codepage.
+    sys.stdin.reconfigure(encoding='utf-8'); sys.stdout.reconfigure(encoding='utf-8')
     snapshot = json.load(sys.stdin)
     root = Path(__file__).resolve().parents[1]
     platform = str(snapshot.get('platform') or '').lower()

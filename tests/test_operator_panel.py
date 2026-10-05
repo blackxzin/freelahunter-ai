@@ -45,3 +45,26 @@ def test_manager_rejects_unknown_platform_without_starting():
     manager = HunterProcessManager(ROOT)
     with pytest.raises(ValueError):
         manager.start("linkedin")
+
+
+def test_request_allowed_blocks_foreign_host_and_cross_site_origin():
+    from freelahunter.operator_panel import request_allowed
+
+    assert request_allowed("127.0.0.1:8765", None)
+    assert request_allowed("localhost:8765", "http://localhost:8765")
+    assert request_allowed("[::1]:8765", None)
+    assert not request_allowed("evil.example:8765", None)  # DNS rebinding
+    assert not request_allowed("127.0.0.1:8765", "https://evil.example")  # cross-site POST
+    assert not request_allowed("127.0.0.1:8765", "null")
+    assert not request_allowed(None, None)
+
+
+def test_panel_app_returns_403_for_foreign_origin():
+    pytest.importorskip("fastapi")
+    pytest.importorskip("httpx")
+    from fastapi.testclient import TestClient
+    from freelahunter.operator_panel import create_operator_app
+
+    client = TestClient(create_operator_app(HunterProcessManager(ROOT)), base_url="http://127.0.0.1:8765")
+    assert client.get("/api/status").status_code == 200
+    assert client.post("/api/stop", headers={"Origin": "https://evil.example"}).status_code == 403

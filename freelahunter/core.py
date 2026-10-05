@@ -110,7 +110,7 @@ class ProfileService:
         p=Profile(name='FreelaHunter User', headline='Desenvolvedor Full Stack | Python, APIs e Automação', skills=['Python','Java','JavaScript','TypeScript','HTML','CSS','React','Next.js','FastAPI','APIs REST','SQL','Linux','Git','GitHub','Automação','Integrações','IA'])
         if os.path.exists(self.path):
             import yaml
-            data=yaml.safe_load(open(self.path)) or {}; 
+            with open(self.path, encoding='utf-8') as handle: data=yaml.safe_load(handle) or {}
             for k,v in data.items():
                 if hasattr(p,k): setattr(p,k,v)
         return p
@@ -212,7 +212,7 @@ class ProposalValidator:
             variants = self._price_variants(proposal.suggested_price, getattr(profile, 'currency', 'BRL'))
             if not variants or not any(variant in low for variant in variants):
                 reasons.append('proposal does not present the suggested price' if english else 'proposta não apresenta o preço sugerido')
-        known={x.lower() for x in profile.skills}; mentioned=re.findall(r'\b[A-Za-z][A-Za-z+#.]+\b',m)
+        known={x.lower() for x in profile.skills}
         # only flag obvious unsupported technology claims
         if any(t in low for t in ['django','kubernetes']) and not any(t in known for t in ['django','kubernetes']): reasons.append('tecnologia não presente no perfil')
         proposal.validation_status='PASSED' if not reasons else 'FAILED'; return proposal.validation_status, reasons
@@ -286,7 +286,8 @@ class RuntimeControl:
 class Database:
     OUTCOME_STATUSES = {'draft', 'awaiting_response', 'responded', 'accepted', 'rejected', 'no_response', 'cancelled'}
 
-    def __init__(self, path='freelahunter.db'):
+    def __init__(self, path=None):
+        path = path or os.getenv('DATABASE_PATH') or 'freelahunter.db'
         self.conn = sqlite3.connect(path, check_same_thread=False)
         self.lock = threading.Lock()
         self.conn.execute('PRAGMA busy_timeout=5000')
@@ -379,7 +380,7 @@ class Database:
     def already_sent(self,key):
         """Return true when this proposal was sent or reserved by another worker."""
         return self.conn.execute(
-            'SELECT 1 FROM proposals WHERE idempotency_key=? AND status IN ("SENT", "SENDING")',
+            "SELECT 1 FROM proposals WHERE idempotency_key=? AND status IN ('SENT', 'SENDING')",
             (key,),
         ).fetchone() is not None
 
@@ -454,7 +455,7 @@ class Database:
             ).fetchone()
             if not current or current[1] == 'SENT':
                 return False
-            cursor = self.conn.execute('''UPDATE proposals SET status="SENT", sent_external_id=?, sent_at=?, conversation_id=COALESCE(?, conversation_id),
+            cursor = self.conn.execute('''UPDATE proposals SET status='SENT', sent_external_id=?, sent_at=?, conversation_id=COALESCE(?, conversation_id),
                 outcome_status=CASE WHEN outcome_status='draft' THEN 'awaiting_response' ELSE outcome_status END,
                 outcome_updated_at=? WHERE idempotency_key=? AND status <> 'SENT' ''',
                 (external_id,sent_at,conversation_id,sent_at,key))
@@ -502,7 +503,7 @@ class Database:
                                       message_at or now(),int(is_scope_context)))
         if proposal_id and direction == 'inbound':
             received_at = message_at or now()
-            self.conn.execute('UPDATE proposals SET outcome_status="responded", response_at=COALESCE(response_at, ?), outcome_updated_at=? WHERE id=?',
+            self.conn.execute("UPDATE proposals SET outcome_status='responded', response_at=COALESCE(response_at, ?), outcome_updated_at=? WHERE id=?",
                               (received_at,now(),proposal_id))
             self.record_proposal_event(proposal_id, 'client_response', {'conversation_id': conversation_id})
         self.conn.commit()

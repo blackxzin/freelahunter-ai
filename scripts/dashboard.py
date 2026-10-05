@@ -22,7 +22,7 @@ def bar_rows(rows, label='count'):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--database', default='freelahunter.db')
+    parser.add_argument('--database', default=None)
     parser.add_argument('--output', default='reports/dashboard.html')
     args = parser.parse_args()
     db = Database(args.database)

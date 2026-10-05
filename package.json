@@ -5,7 +5,7 @@
   "scripts": {
     "test:browser": "playwright test",
     "hunt:chrome": "node scripts/interactive_hunt.mjs",
-    "hunt:upwork": "PLATFORM=upwork MAX_JOBS=2 HUNT_INTERVAL_MINUTES=12 RUN_FOREVER=true AUTO_SEND=false DRY_RUN=true node scripts/interactive_hunt.mjs",
+    "hunt:upwork": "node scripts/hunt_upwork.mjs",
     "monitor:inbox": "node scripts/monitor_inbox.mjs",
     "smoke:selectors": "node scripts/smoke_selectors.mjs",
     "smoke:upwork": "node scripts/upwork_readonly_smoke.mjs",
