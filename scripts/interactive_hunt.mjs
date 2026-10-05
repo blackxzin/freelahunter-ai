@@ -379,7 +379,7 @@ async function main() {
     const displayedMessage = result.kind === 'question'
       ? (displayedPrice != null ? result.draft.fallback_message : result.draft.question)
       : result.draft.message;
-    console.log(`Valor sugerido: ${displayedPrice != null ? money(displayedPrice, result.snapshot.currency) : 'a combinar'} | prazo: ${result.draft.estimated_days ?? 'a confirmar'} dias`);
+    console.log(`Valor sugerido: ${displayedPrice != null ? money(displayedPrice, result.snapshot.currency) : 'a combinar'} | prazo: ${(result.kind === 'question' ? result.draft.fallback_days : result.draft.estimated_days) ?? 'a confirmar'} dias`);
     console.log(`Texto preparado:\n${displayedMessage}`);
     const clientGate = tracking('client-gate', {
       client_key: result.snapshot.client_key,

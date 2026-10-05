@@ -138,8 +138,9 @@ def context(args):
 
 
 def main():
+    sys.stdin.reconfigure(encoding='utf-8'); sys.stdout.reconfigure(encoding='utf-8')
     parser = argparse.ArgumentParser(description='Acompanha propostas e conversões do FreelaHunter.')
-    parser.add_argument('--database', default='freelahunter.db')
+    parser.add_argument('--database', default=None)
     sub = parser.add_subparsers(dest='command', required=True)
     p = sub.add_parser('register'); p.set_defaults(func=register)
     p = sub.add_parser('claim'); p.add_argument('--proposal-id', type=int, required=True); p.add_argument('--max-per-client', type=int, default=1); p.set_defaults(func=claim)

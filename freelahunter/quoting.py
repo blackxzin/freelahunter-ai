@@ -75,7 +75,7 @@ def build_quote(snapshot, profile, settings=None):
         pricing_path = Path(getattr(profile, 'pricing_path', '') or 'config/pricing.json')
         if not pricing_path.is_absolute():
             pricing_path = ROOT / pricing_path
-        settings = json.loads(pricing_path.read_text())
+        settings = json.loads(pricing_path.read_text(encoding='utf-8'))
     currency = detect_currency(snapshot, profile, settings)
     overrides = settings.get('currency_overrides', {}).get(currency, {})
     if overrides:
@@ -305,7 +305,7 @@ def build_quote(snapshot, profile, settings=None):
     return dict(action=action, subject=f'Proposal: {title}' if english else f'Proposta: {title}', message=message, question=question,
                 suggested_price=initial_price if prices and action == 'proposal' else None,
                 fallback_message=fallback_message, fallback_price=initial_price,
-                estimated_days=initial_days,
+                estimated_days=initial_days if action == 'proposal' else None, fallback_days=initial_days,
                 estimated_hours=high, hours_range=[low, high], price_range=prices,
                 client_total_range=totals, days_range=days, questions=questions, breakdown=tasks,
                 assumptions=settings, knowledge=advisory,

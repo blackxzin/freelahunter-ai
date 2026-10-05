@@ -5,6 +5,7 @@ Plataforma segura de descoberta, análise e geração de propostas para freelanc
 ## Executar
 
 ```bash
+python -m pip install -r requirements-dev.txt   # pyyaml, pytest, fastapi/httpx
 python scripts/demo.py
 python scripts/hunt.py --provider mock
 python scripts/e2e.py
@@ -22,6 +23,8 @@ MAX_JOBS=5 node scripts/interactive_hunt.mjs
 # Upwork: duas vagas por ciclo, com intervalo de 12 minutos
 PLATFORM=upwork MAX_JOBS=2 HUNT_INTERVAL_MINUTES=12 RUN_FOREVER=true \
   AUTO_SEND=false DRY_RUN=true node scripts/interactive_hunt.mjs
+# equivalente multiplataforma (Windows/PowerShell)
+npm run hunt:upwork
 ```
 
 Painel local para escolher qual plataforma caçar:
