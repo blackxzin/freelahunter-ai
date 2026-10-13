@@ -6,7 +6,10 @@ import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { readSnapshot } from './job_snapshot.mjs';
 import { hasExactMessage, hasPriorProjectIntroduction } from './submission_guard.mjs';
-import { firstLocator, getPlatform, getSelectors } from './selectors.mjs';
+import { findExistingClientContact } from './client_contact_guard.mjs';
+import { firstLocator, getPlatform, getSelectors, normalizeJobUrl } from './selectors.mjs';
+import { saveDraft } from './draft_store.mjs';
+import { navigateWithRetry, browserDisconnected } from './recovery.mjs';
 import { loadLocalEnv } from './local_env.mjs';
 import { sendDiscordNotification } from './discord_notify.mjs';
 import { isAccessChallenge, selectUpworkGoogleAccount, waitForManualAccess } from './access_guard.mjs';
@@ -21,7 +24,7 @@ const platform = getPlatform(process.env.PLATFORM || process.env.JOBS_URL);
 const selectors = getSelectors(platform.name);
 const listingUrl = process.env.JOBS_URL || platform.listing_url;
 const maxJobs = Number(process.env.MAX_JOBS || (platform.name === 'upwork' ? 2 : 5));
-const targetJobUrl = process.env.TARGET_JOB_URL;
+const targetJobUrl = process.env.TARGET_JOB_URL ? normalizeJobUrl(process.env.TARGET_JOB_URL, platform) : null;
 const automationMode = process.env.AUTOMATION_MODE || 'SEMI_AUTO';
 const autoSend = process.env.AUTO_SEND === 'true' && automationMode === 'AUTO';
 const dryRun = process.env.DRY_RUN !== 'false';
@@ -29,7 +32,8 @@ const killSwitch = process.env.AUTO_SEND_KILL_SWITCH !== 'false';
 const minDelay = Math.max(0, Number(process.env.ACTION_DELAY_MIN_MS || 350));
 const maxDelay = Math.max(minDelay, Number(process.env.ACTION_DELAY_MAX_MS || 1200));
 const runForever = process.env.RUN_FOREVER === 'true';
-const pollSeconds = Math.max(60, Number(process.env.HUNT_POLL_SECONDS || (Number(process.env.HUNT_INTERVAL_MINUTES || (platform.name === 'upwork' ? 12 : 15)) * 60)));
+const configuredPollSeconds = Number(process.env.HUNT_POLL_SECONDS || (Number(process.env.HUNT_INTERVAL_MINUTES || (platform.name === 'upwork' ? 12 : 15)) * 60));
+const pollSeconds = Number.isFinite(configuredPollSeconds) ? Math.max(0, configuredPollSeconds) : 900;
 const forceProposal = process.env.AUTO_FORCE_PROPOSAL === 'true';
 const maxProposalsPerClient = Math.max(1, Number(process.env.MAX_PROPOSALS_PER_CLIENT_24H || 1));
 const maxMessagesPerClient = Math.max(1, Number(process.env.MAX_MESSAGES_PER_CLIENT_24H || 1));
@@ -38,6 +42,9 @@ const maxIdleCycles = Math.max(0, Number(process.env.STOP_AFTER_IDLE_CYCLES || 0
 const premium = /premium|projeto exclusivo|bandeira dourada|selo dourado|assinar|assinatura|turbinar/i;
 
 async function ensureAccess(page) {
+  if (platform.name === 'workana' && /\/(?:pt\/|en\/|es\/)?(?:login|signup|sign-up|sign-in)(?:[/?#]|$)/i.test(page.url())) {
+    await ask('Faça login na Workana no Chromium e pressione Enter para continuar: ');
+  }
   if (platform.name === 'upwork') {
     const selected = await selectUpworkGoogleAccount(page, selectors.auth, process.env.UPWORK_GOOGLE_ACCOUNT_LABEL || 'Lucas');
     if (!selected && /accounts\.google\.com/i.test(page.url())) {
@@ -51,9 +58,16 @@ function generate(snapshot) {
   const result = spawnSync('python', ['scripts/generate_proposal.py'], {
     cwd: root,
     input: JSON.stringify(snapshot),
+    env: { ...process.env, HUNT_ANALYSIS_CACHE: 'true' },
     encoding: 'utf8',
   });
   if (result.status !== 0) throw new Error(result.stderr || 'falha ao gerar proposta');
+  return JSON.parse(result.stdout);
+}
+
+function operations(command, payload) {
+  const result = spawnSync('python', ['scripts/operations.py', command], { cwd: root, input: JSON.stringify(payload), encoding: 'utf8' });
+  if (result.status !== 0) throw new Error(result.stderr || 'Falha ao acessar fila de revisão.');
   return JSON.parse(result.stdout);
 }
 
@@ -106,7 +120,7 @@ function forceProposalDraft(draft, snapshot) {
     : `Olá! Temos interesse no projeto “${title}”. Entendemos que a entrega envolve ${scope}. `
       + 'Somos uma equipe de dois desenvolvedores full stack que trabalham juntos. '
       + 'Propomos executar em etapas verificáveis, com alinhamento, implementação, testes e entrega documentada. '
-      + `Como referência inicial, propomos ${money(draft.suggested_price)} e prazo de até ${days} dias corridos. `
+      + `Como referência inicial, propomos ${money(draft.suggested_price, snapshot?.currency)} e prazo de até ${days} dias corridos. `
       + 'O preço pode ser negociado conforme os detalhes finais do escopo e as prioridades do projeto. '
       + 'APIs, hospedagem, domínio e serviços pagos ficam nas contas do cliente.';
   draft.validation_status = 'PENDING';
@@ -198,6 +212,92 @@ async function humanPause() {
   await new Promise((resolve) => setTimeout(resolve, Math.round(delay)));
 }
 
+function selectorList(values = []) {
+  return values.filter(Boolean).join(',');
+}
+
+async function readInboxConversations(page) {
+  const conversations = [];
+  const visited = new Set();
+  for (let pageNumber = 0; pageNumber < 20; pageNumber += 1) {
+    const currentUrl = page.url();
+    if (visited.has(currentUrl)) break;
+    visited.add(currentUrl);
+
+    let rowSelector = null;
+    for (const candidate of selectors.inbox?.row || []) {
+      if (await page.locator(candidate).count()) {
+        rowSelector = candidate;
+        break;
+      }
+    }
+    if (!rowSelector) {
+      const body = await page.locator('body').innerText().catch(() => '');
+      if (pageNumber === 0 && /nenhuma conversa|sem mensagens|caixa de entrada vazia|não há conversas/i.test(body)) {
+        return { checked: true, conversations: [] };
+      }
+      return pageNumber === 0
+        ? { checked: false, reason: 'linhas da caixa de mensagens não localizadas' }
+        : { checked: true, conversations };
+    }
+    const fieldSelectors = {
+      client: selectorList(selectors.inbox.client || []),
+      project: selectorList(selectors.inbox.project || []),
+      preview: selectorList(selectors.inbox.preview || []),
+      clientLink: "a[href*='/users/'], a[href*='/user/']",
+      conversationLink: "a[href*='/messages/'], a[href*='/message/']",
+    };
+    conversations.push(...await page.locator(rowSelector).evaluateAll((rows, fields) => rows.map((row) => {
+      const text = (selector) => selector ? row.querySelector(selector)?.textContent?.trim() || '' : '';
+      const link = (selector) => selector ? row.querySelector(selector)?.getAttribute('href') || '' : '';
+      return {
+        client: text(fields.client),
+        project: text(fields.project),
+        preview: text(fields.preview),
+        client_url: link(fields.clientLink),
+        url: link(fields.conversationLink),
+      };
+    }), fieldSelectors));
+
+    const next = await firstLocator(page, [
+      "a[rel='next']",
+      "a[aria-label*='Próxima']",
+      "a[aria-label*='Proxima']",
+      ".pagination a.next",
+      ".pagination a:has-text('Próxima')",
+      ".pagination a:has-text('Próximo')",
+    ], { visible: true });
+    if (!next) break;
+    const href = await next.getAttribute('href');
+    if (!href) break;
+    const nextUrl = new URL(href, page.url()).href;
+    if (visited.has(nextUrl)) break;
+    await page.goto(nextUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await humanPause();
+  }
+  return { checked: true, conversations };
+}
+
+async function inboxContactForClient(snapshot, jobPage) {
+  if (platform.name !== '99freelas') return { checked: true, found: false };
+  if (!snapshot?.client && !snapshot?.client_url) {
+    return { checked: false, reason: 'cliente não identificado na vaga' };
+  }
+  const inboxPage = await jobPage.context().newPage();
+  try {
+    await inboxPage.goto(platform.inbox_url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await ensureAccess(inboxPage);
+    await inboxPage.waitForTimeout(1200);
+    const inbox = await readInboxConversations(inboxPage);
+    if (!inbox.checked) return inbox;
+    return { ...findExistingClientContact(inbox.conversations, snapshot), checked: true };
+  } catch (error) {
+    return { checked: false, reason: `falha ao consultar mensagens: ${error.message}` };
+  } finally {
+    await inboxPage.close().catch(() => {});
+  }
+}
+
 async function conversationMessages(page, messagePageUrl) {
   await page.goto(messagePageUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
   const conversationLink = await firstLocator(page, selectors.conversation.link);
@@ -237,9 +337,9 @@ async function verifyQuestion(page, messagePageUrl, expected) {
 }
 
 async function fillJob(page, link) {
-  await page.goto(link, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await navigateWithRetry(page, link, { waitUntil: 'domcontentloaded', timeout: 30000 });
   await ensureAccess(page);
-  if (platform.name === 'upwork') {
+  if (platform.name === 'upwork' || platform.name === 'workana') {
     await page.waitForTimeout(Math.max(1000, Number(process.env.JOB_RENDER_WAIT_MS || 3000)));
     await ensureAccess(page);
   }
@@ -247,14 +347,23 @@ async function fillJob(page, link) {
   try { snapshot = await readSnapshot(page, selectors, platform.name); }
   catch (error) { return { skipped: `${error.message} (${await page.title().catch(() => '')})` }; }
   snapshot.client_key = snapshot.client_url || snapshot.client;
+  const inboxContact = await inboxContactForClient(snapshot, page);
+  if (!inboxContact.checked) return { skipped: `Envio bloqueado: não foi possível verificar as mensagens (${inboxContact.reason}).` };
+  if (inboxContact.found) {
+    return { skipped: 'Envio bloqueado: já existe conversa com este cliente na caixa de mensagens.' };
+  }
   snapshot.client_history = clientHistory(snapshot.client_key);
   snapshot.confirmed_context = clientContext(snapshot.client_key);
   const draft = forceProposalDraft(generate(snapshot), snapshot);
-  if (draft.action === 'skip') return { skipped: draft.reason };
+  console.log(JSON.stringify({ event: draft.cache_hit ? 'analysis_cached' : 'job_ranked', score: draft.selection?.score, reasons: draft.selection?.reasons, exclusions: draft.selection?.exclusions }));
+  if (draft.outcome && draft.outcome !== 'draft') return { skipped: `Vaga já acompanhada no painel: ${draft.outcome}`, cached: draft.cache_hit };
+  if (draft.action === 'skip') return { skipped: draft.reason, cached: draft.cache_hit };
+  if (draft.reviewed) return { skipped: 'Revisão manual salva no painel; envio deve ser feito após revisão.', cached: draft.cache_hit };
+  if (draft.cache_hit && (!platform.allow_submission || dryRun || killSwitch)) return { skipped: 'Vaga sem alterações; rascunho já disponível no painel.', cached: true };
   console.log(JSON.stringify({ tasks: draft.breakdown, price_range: draft.price_range,
     client_total_range: draft.client_total_range, days_range: draft.days_range,
     questions: draft.questions, commercial_reference: draft.knowledge }, null, 2));
-  if (!platform.allow_submission) {
+  if (!platform.allow_submission || dryRun || killSwitch) {
     return { kind: draft.action === 'question' ? 'question' : 'proposal', draft, snapshot, jobUrl: link };
   }
   if (draft.action === 'question') {
@@ -314,6 +423,11 @@ async function fillJob(page, link) {
 }
 
 async function main() {
+  if (!Number.isInteger(maxJobs) || maxJobs < 1) throw new Error('MAX_JOBS deve ser um inteiro positivo.');
+  const listing = new URL(listingUrl);
+  if (listing.protocol !== 'https:' || !platform.hostnames.includes(listing.hostname)) {
+    throw new Error('JOBS_URL deve pertencer à plataforma selecionada e usar HTTPS.');
+  }
   if (autoSend && (dryRun || killSwitch)) {
     throw new Error('AUTO mode exige DRY_RUN=false e AUTO_SEND_KILL_SWITCH=false.');
   }
@@ -332,7 +446,14 @@ async function main() {
     let firstCycle = true;
     let idleCycles = 0;
     while (true) {
-    await page.goto(listingUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    try {
+      await navigateWithRetry(page, listingUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    } catch (error) {
+      if (browserDisconnected(error) || !runForever) throw error;
+      console.error(`Listagem indisponível; nova tentativa em 60 segundos: ${error.message}`);
+      await page.waitForTimeout(60000);
+      continue;
+    }
     await ensureAccess(page);
     if (firstCycle && process.env.AUTO_LOGIN_PROMPT !== 'false' && !autoSend) await ask('Faça login manualmente no Chromium. Quando terminar, pressione Enter aqui: ');
     const links = targetJobUrl ? [{ href: targetJobUrl, text: targetJobUrl }] : await (async () => {
@@ -342,9 +463,13 @@ async function main() {
         collected.push(...rows);
       }
       const seen = new Set();
-      return collected.filter(({ href, text }) => {
-        if (!new RegExp(platform.job_link_pattern, 'i').test(new URL(href, page.url()).pathname) || !text.trim() || seen.has(href)) return false;
-        seen.add(href); return true;
+      return collected.flatMap(({ href, text }) => {
+        try {
+          const canonical = normalizeJobUrl(href, platform);
+          if (!text.trim() || seen.has(canonical)) return [];
+          seen.add(canonical);
+          return [{ href: canonical, text }];
+        } catch { return []; }
       });
     })();
     if (!links.length && await isAccessChallenge(page)) {
@@ -356,16 +481,18 @@ async function main() {
     }
     let processed = 0;
     let inspected = 0;
+    let analyzed = 0;
     let cycleSent = 0;
-    for (const item of links) {
-    if (inspected >= maxJobs) break;
+    for (const item of operations('order', { links })) {
+    if (analyzed >= maxJobs || inspected >= maxJobs * 10) break;
     inspected += 1;
     if (premium.test(item.text)) continue;
     const jobPage = await context.newPage();
+    try {
     await jobPage.bringToFront();
     await humanPause();
     const result = await fillJob(jobPage, item.href);
-    try {
+    if (!result.cached) analyzed += 1;
     if (result.skipped) { console.log(`IGNORADA: ${result.skipped} — ${item.href}`); continue; }
     if (result.draft.validation_status && result.draft.validation_status !== 'PASSED' && !forceProposal) {
       console.log(`IGNORADA: proposta não passou validação — ${(result.draft.validation_reasons || []).join('; ')}`);
@@ -374,13 +501,20 @@ async function main() {
     if (!result.snapshot.client_key) {
       console.log(`AVISO: identificador do cliente não localizado; proteção aplicada pela chave da vaga — ${item.href}`);
     }
-    console.log(`${result.kind.toUpperCase()} preenchida: ${result.draft.subject || item.href}`);
+    const draftPath = saveDraft(root, platform.name, result.snapshot, result.draft);
+    console.log(`${result.kind.toUpperCase()} preparada: ${result.draft.subject || item.href}`);
+    console.log(`Rascunho salvo: ${draftPath}`);
     const displayedPrice = result.draft.suggested_price ?? result.draft.fallback_price;
     const displayedMessage = result.kind === 'question'
       ? (displayedPrice != null ? result.draft.fallback_message : result.draft.question)
       : result.draft.message;
-    console.log(`Valor sugerido: ${displayedPrice != null ? money(displayedPrice, result.snapshot.currency) : 'a combinar'} | prazo: ${(result.kind === 'question' ? result.draft.fallback_days : result.draft.estimated_days) ?? 'a confirmar'} dias`);
+    console.log(`Valor sugerido: ${displayedPrice != null ? money(displayedPrice, result.snapshot.currency) : 'a combinar'} | prazo: ${result.draft.estimated_days ?? result.draft.fallback_days ?? 'a confirmar'} dias`);
     console.log(`Texto preparado:\n${displayedMessage}`);
+    if (!platform.allow_submission || dryRun || killSwitch) {
+      processed += 1;
+      console.log(`RASCUNHO PREPARADO para ${platform.name}; envio desativado nesta execução.`);
+      continue;
+    }
     const clientGate = tracking('client-gate', {
       client_key: result.snapshot.client_key,
       max_per_day: maxProposalsPerClient,
@@ -478,10 +612,12 @@ async function main() {
           const confirmed = await verifyQuestion(jobPage, sendPageUrl, sendMessage);
           if (!confirmed) throw new Error('O site não confirmou a mensagem na conversa; envio não será repetido automaticamente.');
           markSent(tracked.proposal_id, `question-${tracked.proposal_id}`, conversationIdFromUrl(jobPage.url()));
+          operations('sent', { url: result.snapshot.url });
           cycleSent += 1;
           console.log(`${fallbackFromProposalLimit ? 'MENSAGEM FALLBACK' : 'MENSAGEM'} CONFIRMADA na conversa: ${jobPage.url()}`);
         } else if (response?.ok()) {
           markSent(tracked.proposal_id, `proposal-${tracked.proposal_id}`, conversationIdFromUrl(jobPage.url()));
+          operations('sent', { url: result.snapshot.url });
           cycleSent += 1;
           console.log(`ENVIO CONFIRMADO pelo site (HTTP ${response.status()}). Página atual: ${jobPage.url()}`);
         } else {
@@ -491,12 +627,13 @@ async function main() {
       else console.log('Botão de envio não localizado; rascunho preservado.');
     }
     } catch (error) {
+      if (browserDisconnected(error)) throw error;
       console.error(`FALHA na vaga ${item.href}: ${error.message}`);
     } finally {
       await jobPage.close().catch(() => {});
     }
     }
-    idleCycles = cycleSent === 0 ? idleCycles + 1 : 0;
+    idleCycles = (platform.allow_submission && !dryRun && !killSwitch ? cycleSent : processed) === 0 ? idleCycles + 1 : 0;
     console.log(`Ciclo concluído: ${inspected} vaga(s) inspecionada(s), ${cycleSent} envio(s). Chromium permanece aberto.`);
     if (runForever && maxIdleCycles > 0 && idleCycles >= maxIdleCycles) {
       console.log(`Caça encerrada após ${idleCycles} ciclo(s) sem envio para economizar créditos.`);
@@ -507,12 +644,13 @@ async function main() {
       break;
     }
     firstCycle = false;
-    await page.waitForTimeout(pollSeconds * 1000);
+    if (pollSeconds > 0) await page.waitForTimeout(pollSeconds * 1000);
+    else await page.waitForTimeout(1000);
     }
   } finally {
-    if (context) await context.close();
+    if (context) await context.close().catch(() => {});
     rl.close();
   }
 }
 
-main().catch((error) => { console.error(error.message); rl.close(); process.exitCode = 1; });
+main().catch((error) => { console.error(error.message); rl.close(); process.exitCode = browserDisconnected(error) ? 75 : 1; });

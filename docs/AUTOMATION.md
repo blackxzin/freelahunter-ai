@@ -14,6 +14,13 @@ por escopo, sempre informando que o preço pode ser negociado. Mensagens não us
 limite de propostas, mas há uma trava separada por cliente (`MAX_MESSAGES_PER_CLIENT_24H`,
 padrão 1) para evitar spam.
 
+No 99Freelas, antes de preparar ou enviar uma proposta, o modo Chromium consulta
+a caixa de mensagens e compara o cliente por URL e nome normalizados. Qualquer
+conversa existente com a mesma pessoa bloqueia novo contato, inclusive quando o
+envio anterior foi feito manualmente e não está no banco local. A consulta percorre
+as páginas disponíveis da caixa; se a caixa não puder ser verificada, o envio é
+bloqueado.
+
 ## Navegador
 
 `ProposalBrowserAutomation` só abre vaga HTTPS e preenche proposta com validação `PASSED`. O adaptador não realiza login, não contorna CAPTCHA/anti-bot e não envia nada sem aprovação explícita do usuário e autorização do provider. O teste Playwright usa exclusivamente formulário HTML mock local: `npm run test:browser`.

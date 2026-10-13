@@ -268,3 +268,23 @@ def test_pipeline_does_not_send_unresolved_scope():
     assert result['review'] == 1
     assert result['sent'] == 0
     assert not sender.sent
+
+
+def test_reais_in_budget_text_do_not_become_dollars():
+    from freelahunter.quoting import detect_currency
+
+    assert detect_currency({'budget_text': 'R$ 1.500,00'}, ProfileService().load(), {}) == 'BRL'
+
+
+def test_portuguese_workana_quote_keeps_foreign_currency():
+    import subprocess
+    import sys
+
+    result = subprocess.run([sys.executable, 'scripts/generate_proposal.py'], input=json.dumps({
+        'platform': 'workana', 'currency': 'USD', 'title': 'Landing page',
+        'description': 'Landing page responsiva com layout aprovado, textos e imagens fornecidos. HTML e CSS com aceite em celular e desktop e uma revisão.',
+    }), capture_output=True, text=True, encoding='utf-8', check=True)
+    draft = json.loads(result.stdout)
+    assert 'R$' not in draft['fallback_message']
+    assert '$' in draft['fallback_message']
+    assert 'Olá' in draft['fallback_message']

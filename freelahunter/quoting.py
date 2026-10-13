@@ -43,10 +43,10 @@ def detect_currency(snapshot, profile, settings):
         return 'EUR'
     if re.search(r'£|\bGBP\b', text, re.IGNORECASE):
         return 'GBP'
-    if re.search(r'US\$|\$|\bUSD\b', text, re.IGNORECASE):
-        return 'USD'
     if re.search(r'R\$|\bBRL\b', text, re.IGNORECASE):
         return 'BRL'
+    if re.search(r'US\$|\$|\bUSD\b', text, re.IGNORECASE):
+        return 'USD'
     return str(settings.get('currency') or getattr(profile, 'currency', 'BRL')).upper()
 
 
@@ -270,7 +270,7 @@ def build_quote(snapshot, profile, settings=None):
                         'the price is negotiable based on the final details, scope, and priorities. '
                         'We can align the milestones and adjust the proposal here on Upwork.')
         else:
-            message += (f' Como proposta inicial para esse escopo, indicamos {format_brl(initial_price)} e prazo de até '
+            message += (f' Como proposta inicial para esse escopo, indicamos {format_money(initial_price, currency)} e prazo de até '
                         f'{initial_days} dias corridos, incluindo testes e uma rodada de revisão. Esse é um valor de '
                         'referência. O valor pode ser combinado e o preço pode ser negociado conforme os detalhes finais, '
                         'o escopo e as prioridades '
@@ -285,7 +285,7 @@ def build_quote(snapshot, profile, settings=None):
                                 'Paid APIs, hosting, domains, and services remain in the client account.')
         else:
             fallback_message = (opening + f' Pelo serviço descrito, consideramos inicialmente {fallback_scope}. '
-                                f'Com base nessas entregas, nossa estimativa preliminar é de {format_brl(initial_price)}, '
+                                f'Com base nessas entregas, nossa estimativa preliminar é de {format_money(initial_price, currency)}, '
                                 f'com prazo de até {initial_days} dias corridos. O preço pode ser negociado conforme os '
                                 'detalhes finais, prioridades e critérios de aceite; depois de confirmar o escopo, '
                                 'ajustamos a proposta. Somos flexíveis para dividir a entrega em etapas verificáveis, '
@@ -305,7 +305,8 @@ def build_quote(snapshot, profile, settings=None):
     return dict(action=action, subject=f'Proposal: {title}' if english else f'Proposta: {title}', message=message, question=question,
                 suggested_price=initial_price if prices and action == 'proposal' else None,
                 fallback_message=fallback_message, fallback_price=initial_price,
-                estimated_days=initial_days if action == 'proposal' else None, fallback_days=initial_days,
+                estimated_days=initial_days if action == 'proposal' else None,
+                fallback_days=initial_days,
                 estimated_hours=high, hours_range=[low, high], price_range=prices,
                 client_total_range=totals, days_range=days, questions=questions, breakdown=tasks,
                 assumptions=settings, knowledge=advisory,

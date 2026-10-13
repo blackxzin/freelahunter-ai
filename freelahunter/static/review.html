@@ -1,0 +1,42 @@
+<section class="review-section" aria-labelledby="review-title">
+  <div class="section-label"><h2 id="review-title">Rascunhos e resultados</h2><button class="action" id="reload-review">Atualizar lista</button></div>
+  <p id="review-summary" role="status">Carregando oportunidades…</p>
+  <p>Edite e copie as propostas para revisar na plataforma. Os status abaixo são registros manuais e não enviam mensagens.</p>
+  <div class="review-filters">
+    <label>Plataforma<select id="review-platform"><option value="">Todas</option><option value="99freelas">99Freelas</option><option value="upwork">Upwork</option><option value="workana">Workana</option></select></label>
+    <label>Etapa<select id="review-outcome"><option value="">Todas</option><option value="draft">Rascunho</option><option value="sent">Enviada</option><option value="responded">Respondida</option><option value="negotiating">Em negociação</option><option value="won">Trabalho fechado</option><option value="lost">Não fechado</option><option value="archived">Arquivada</option></select></label>
+    <label>Buscar<input id="review-query" type="search" placeholder="Título ou tecnologia"></label>
+    <label class="check"><input id="review-eligible" type="checkbox" checked> Apenas vagas compatíveis</label>
+  </div>
+  <p id="review-feedback" role="status" aria-live="polite"></p>
+  <div class="review-layout"><div id="review-list" aria-label="Oportunidades"></div>
+  <section id="review-editor" hidden aria-label="Revisar proposta">
+    <h3 id="draft-title"></h3><a id="draft-link" target="_blank" rel="noopener noreferrer">Abrir projeto na plataforma</a>
+    <p id="draft-score"></p><ul id="draft-reasons"></ul>
+    <details><summary>Descrição do projeto</summary><p id="draft-description"></p></details>
+    <label>Texto da proposta<textarea id="draft-message" rows="12"></textarea></label>
+    <label>Etapa<select id="draft-outcome"></select></label>
+    <label>Anotações<textarea id="draft-notes" rows="3" placeholder="Resposta do cliente, próximos passos…"></textarea></label>
+    <div class="toolbar"><button class="action" id="save-draft">Salvar revisão</button><button class="action" id="copy-draft">Copiar texto</button></div>
+    <details><summary>Histórico desta oportunidade</summary><ul id="draft-events"></ul></details>
+  </section></div>
+  <details><summary>Envios anteriores registrados pelo bot</summary><p id="legacy-summary"></p><ul id="legacy-list"></ul></details>
+</section>
+<style>
+.review-section { margin-top:32px; padding:22px; border:1px solid var(--line); border-radius:17px; background:var(--panel); }
+.review-filters { display:flex; flex-wrap:wrap; gap:14px; align-items:end; }
+.review-section label { display:flex; flex-direction:column; gap:5px; font-size:13px; color:#dce3ed; margin-bottom:12px; }
+.review-section input,.review-section select,.review-section textarea { background:#0b0e13; color:#edf0f4; border:1px solid #596575; border-radius:6px; padding:9px; font:inherit; max-width:100%; }
+.review-section textarea { width:100%; resize:vertical; }
+.review-section .check { flex-direction:row; align-items:center; }
+.review-layout { display:grid; grid-template-columns:minmax(200px,1fr) minmax(0,2fr); gap:20px; }
+#review-list { max-height:700px; overflow:auto; }
+.review-item { display:block; width:100%; text-align:left; padding:12px; margin-bottom:8px; background:#202936; color:#edf0f4; border:1px solid var(--line); border-radius:8px; cursor:pointer; overflow-wrap:anywhere; }
+.review-item[aria-pressed=true] { border-color:var(--amber); }
+.review-section a { color:var(--blue); }
+.review-section button.action { background:#233951; color:#edf0f4; }
+.review-section :focus-visible { outline:3px solid var(--blue); outline-offset:2px; }
+#draft-description { white-space:pre-wrap; overflow-wrap:anywhere; }
+@media(max-width:700px) { .review-layout { grid-template-columns:1fr; } .review-section { padding:14px; } }
+</style>
+<script src="/review.js" defer></script>

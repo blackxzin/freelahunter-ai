@@ -1,6 +1,9 @@
 {
   "99freelas": {
-    "hostnames": ["99freelas.com.br", "www.99freelas.com.br"],
+    "hostnames": [
+      "99freelas.com.br",
+      "www.99freelas.com.br"
+    ],
     "listing_url": "https://www.99freelas.com.br/projects?categoria=web-mobile-e-software&page=1",
     "inbox_url": "https://www.99freelas.com.br/messages/inbox",
     "allow_submission": true,
@@ -11,7 +14,10 @@
     "job_link_pattern": "/project/[^/?#]+-\\d+"
   },
   "upwork": {
-    "hostnames": ["upwork.com", "www.upwork.com"],
+    "hostnames": [
+      "upwork.com",
+      "www.upwork.com"
+    ],
     "listing_url": "https://www.upwork.com/nx/find-work/",
     "inbox_url": "https://www.upwork.com/ab/messages/rooms",
     "allow_submission": false,
@@ -20,5 +26,19 @@
     "profile_path": "config/upwork_profile.yaml",
     "pricing_path": "config/upwork_pricing.json",
     "job_link_pattern": "/jobs/"
+  },
+  "workana": {
+    "hostnames": [
+      "workana.com",
+      "www.workana.com"
+    ],
+    "listing_url": "https://www.workana.com/jobs?category=it-programming&language=pt",
+    "inbox_url": "https://www.workana.com/inbox",
+    "allow_submission": false,
+    "locale": "pt-BR",
+    "currency": "BRL",
+    "profile_path": "config/profile.yaml",
+    "pricing_path": "config/workana_pricing.json",
+    "job_link_pattern": "^/(?:pt/|en/|es/)?job/[^/?#]+/?$"
   }
 }

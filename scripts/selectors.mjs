@@ -6,6 +6,7 @@ const platformCatalog = JSON.parse(readFileSync(`${root}/config/platforms.json`,
 const selectorFiles = {
   '99freelas': 'selectors.json',
   upwork: 'upwork_selectors.json',
+  workana: 'workana_selectors.json',
 };
 const loadedSelectors = Object.fromEntries(Object.entries(selectorFiles).map(([name, file]) => [
   name, JSON.parse(readFileSync(`${root}/config/${file}`, 'utf8')),
@@ -13,13 +14,30 @@ const loadedSelectors = Object.fromEntries(Object.entries(selectorFiles).map(([n
 
 export function resolvePlatform(value = '') {
   const candidate = String(value || '').trim().toLowerCase();
+  if (!candidate) return '99freelas';
   if (platformCatalog[candidate]) return candidate;
   try {
     const hostname = new URL(candidate).hostname;
-    return Object.entries(platformCatalog).find(([, config]) => config.hostnames.includes(hostname))?.[0] || '99freelas';
+    const found = Object.entries(platformCatalog).find(([, config]) => config.hostnames.includes(hostname))?.[0];
+    if (found) return found;
   } catch {
-    return '99freelas';
+    // Unknown values must not silently select another marketplace.
   }
+  throw new Error(`Plataforma desconhecida: ${candidate}`);
+}
+
+export function normalizeJobUrl(value, platform) {
+  const url = new URL(value, platform.listing_url);
+  if (url.protocol !== 'https:' || !platform.hostnames.includes(url.hostname)
+      || url.username || url.password || url.port
+      || !new RegExp(platform.job_link_pattern, 'i').test(url.pathname)) {
+    throw new Error(`URL de vaga inválida para ${platform.name}: ${value}`);
+  }
+  url.search = '';
+  url.hash = '';
+  url.hostname = new URL(platform.listing_url).hostname;
+  url.pathname = url.pathname.replace(/\/$/, '');
+  return url.href;
 }
 
 export function getPlatform(value = '') {

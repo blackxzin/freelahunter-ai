@@ -84,6 +84,12 @@ export async function ensureAccessible(page, platform) {
 }
 
 export async function waitForManualAccess(page, platform, ask, timeoutMs = 300000) {
+  const login = () => /\/(?:login|sign-in|signin|account-security\/login)(?:[/?#]|$)/i.test(page.url());
+  if (login()) {
+    console.log(`Sessão de ${platform} expirada. Faça login manualmente no navegador.`);
+    await ask('Após concluir o login, pressione Enter: ');
+    if (login()) throw new Error(`Login de ${platform} ainda não concluído.`);
+  }
   if (!(await isAccessChallenge(page))) return;
   console.log(`A página ${platform} apresentou Cloudflare/CAPTCHA. Resolva manualmente no Chromium visível.`);
   await ask('Depois que a página normal aparecer, pressione Enter aqui: ');

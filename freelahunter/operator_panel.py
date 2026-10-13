@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import signal
+import sqlite3
 import subprocess
 import threading
 import time
@@ -17,6 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
+
+from freelahunter.operations import OperationsStore
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,10 +43,11 @@ def load_platforms(config_path: str | Path = DEFAULT_CONFIG) -> dict[str, Platfo
     """Load the supported platform metadata used by the operator panel."""
     raw = json.loads(Path(config_path).read_text(encoding="utf-8"))
     runtimes: dict[str, PlatformRuntime] = {}
-    labels = {"99freelas": "99Freelas", "upwork": "Upwork"}
+    labels = {"99freelas": "99Freelas", "upwork": "Upwork", "workana": "Workana"}
     defaults = {
         "99freelas": (5, 15),
         "upwork": (2, 12),
+        "workana": (5, 15),
     }
     for name, config in raw.items():
         if name not in defaults:
@@ -66,17 +70,29 @@ def load_platforms(config_path: str | Path = DEFAULT_CONFIG) -> dict[str, Platfo
 
 
 def hunter_environment(platform: PlatformRuntime, base: dict[str, str] | None = None) -> dict[str, str]:
-    """Return a safe environment for one platform hunter."""
-    env = dict(base or os.environ)
+    """Return the configured environment for one platform hunter.
+
+    The panel remains safe by default. Set PANEL_AUTOMATION_MODE=AUTO in the
+    panel process to opt into continuous external submission on platforms that
+    explicitly allow it.
+    """
+    env = dict(os.environ if base is None else base)
+    for key in ("JOBS_URL", "TARGET_JOB_URL", "HUNT_POLL_SECONDS"):
+        env.pop(key, None)
+    requested_mode = str(env.get("PANEL_AUTOMATION_MODE", "SEMI_AUTO")).upper()
+    if requested_mode not in {"AUTO", "SEMI_AUTO"}:
+        raise ValueError("PANEL_AUTOMATION_MODE deve ser AUTO ou SEMI_AUTO")
+    automatic = requested_mode == "AUTO" and platform.allow_submission
     env.update({
         "PLATFORM": platform.name,
         "MAX_JOBS": str(platform.max_jobs),
-        "HUNT_INTERVAL_MINUTES": str(platform.interval_minutes),
+        "HUNT_INTERVAL_MINUTES": "0" if automatic else str(platform.interval_minutes),
         "RUN_FOREVER": "true",
-        "AUTO_SEND": "false",
-        "DRY_RUN": "true",
-        "AUTOMATION_MODE": "SEMI_AUTO",
-        "AUTO_LOGIN_PROMPT": "true",
+        "AUTO_SEND": "true" if automatic else "false",
+        "DRY_RUN": "false" if automatic else "true",
+        "AUTO_SEND_KILL_SWITCH": "false" if automatic else "true",
+        "AUTOMATION_MODE": "AUTO" if automatic else "SEMI_AUTO",
+        "AUTO_LOGIN_PROMPT": "false" if automatic else "true",
     })
     return env
 
@@ -93,7 +109,7 @@ def request_allowed(host: str | None, origin: str | None) -> bool:
 
 def hunter_command(root: str | Path = ROOT) -> list[str]:
     """Build the process command without invoking a shell."""
-    return ["node", str(Path(root) / "scripts" / "interactive_hunt.mjs")]
+    return ["node", str(Path(root) / "scripts" / "hunt_runner.mjs")]
 
 
 class HunterProcessManager:
@@ -210,14 +226,23 @@ class HunterProcessManager:
 
 
 def _page(platforms: dict[str, PlatformRuntime]) -> str:
+    panel_automatic = str(os.environ.get("PANEL_AUTOMATION_MODE", "SEMI_AUTO")).upper() == "AUTO"
+    submission_label = "automático" if panel_automatic else "manual"
+    submission_note = (
+        "o envio externo usa o modo AUTO e continua sujeito às travas de cliente, limite e pausa."
+        if panel_automatic
+        else "o envio de propostas não é automático."
+    )
     cards = []
     for platform in platforms.values():
         if platform.name == "upwork":
             description = "Jobs internacionais · propostas em inglês · moeda da vaga"
+        elif platform.name == "workana":
+            description = "TI e programação · projetos em português · rascunhos locais"
         else:
             description = "Jobs brasileiros · propostas em português · valores em reais"
         badge = "INTERNACIONAL" if platform.name == "upwork" else "BRASIL"
-        mark = "U" if platform.name == "upwork" else "99"
+        mark = {"upwork": "U", "workana": "W", "99freelas": "99"}.get(platform.name, "?")
         cards.append(
             f'''<button class="platform" data-platform="{platform.name}" data-label="{platform.label}"
               data-description="{description}" data-rules="{platform.max_jobs} vaga(s) a cada {platform.interval_minutes} minutos"
@@ -230,6 +255,7 @@ def _page(platforms: dict[str, PlatformRuntime]) -> str:
             </button>'''
         )
     cards_html = "".join(cards)
+    review_html = (ROOT / "freelahunter/static/review.html").read_text()
     return f'''<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>FreelaHunter · Central de caça</title>
@@ -244,7 +270,7 @@ def _page(platforms: dict[str, PlatformRuntime]) -> str:
   .eyebrow {{ color:var(--amber); text-transform:uppercase; font-size:11px; font-weight:800; letter-spacing:.18em; margin:0 0 10px; }}
   h1 {{ max-width:700px; margin:0; font-size:clamp(32px,5vw,55px); line-height:1.03; letter-spacing:-.055em; }} h1 em {{ color:var(--amber); font-style:normal; }} h2 {{ margin:0; font-size:14px; letter-spacing:.02em; }} p {{ color:var(--muted); }} .intro {{ max-width:650px; margin:15px 0 37px; font-size:16px; }}
   .section-label {{ display:flex; align-items:center; justify-content:space-between; gap:14px; margin-bottom:13px; color:#c8d0dc; }} .step {{ color:var(--muted); font-size:11px; font-weight:800; letter-spacing:.13em; text-transform:uppercase; }}
-  .grid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; margin-bottom:28px; }}
+  .grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:14px; margin-bottom:28px; }}
   .platform {{ min-height:236px; text-align:left; color:inherit; background:linear-gradient(145deg, rgba(28,37,49,.96), rgba(17,22,30,.96)); border:1px solid var(--line); border-radius:17px; padding:20px; cursor:pointer; display:flex; flex-direction:column; gap:10px; transition:transform .18s ease,border-color .18s ease,background .18s ease,box-shadow .18s ease; }}
   .platform:hover {{ transform:translateY(-2px); border-color:#526276; background:#1a2430; }} .platform.selected {{ border-color:var(--amber); box-shadow:0 0 0 1px var(--amber), 0 15px 34px rgba(0,0,0,.2); background:linear-gradient(145deg, #252d37, #171d26); }}
   .platform:focus-visible, button.action:focus-visible {{ outline:3px solid rgba(114,183,255,.65); outline-offset:3px; }}
@@ -264,8 +290,8 @@ def _page(platforms: dict[str, PlatformRuntime]) -> str:
 <section class="status"><div class="status-main"><div class="status-head"><span id="state" class="pill">parado</span><strong id="current">Nenhuma plataforma selecionada</strong></div>
 <p id="details">Clique em um cartão para selecionar a plataforma.</p><div class="toolbar"><button id="start" class="action">Caçar</button><button id="stop" class="action">Parar caça</button><button id="continue" class="action">Continuar após login</button></div>
 <div class="log-wrap"><div class="log-head">Atividade ao vivo <span>atualiza automaticamente</span></div><pre id="logs">Aguardando uma plataforma…</pre></div></div>
-<aside class="status-side"><div class="side-title">Fluxo protegido</div><div class="side-list"><div class="side-item"><span>Busca e análise</span><b>automático</b></div><div class="side-item"><span>Rascunho</span><b>preparado</b></div><div class="side-item"><span>Envio externo</span><b>manual</b></div><div class="side-item"><span>Login e desafios</span><b>manual</b></div></div></aside>
-<p class="hint"><strong>Nota:</strong> o botão Caçar inicia o processo contínuo. A conta, Google, CAPTCHA e desafios da plataforma continuam sob confirmação manual; o envio de propostas não é automático.</p></section></main>
+<aside class="status-side"><div class="side-title">Fluxo protegido</div><div class="side-list"><div class="side-item"><span>Busca e análise</span><b>automático</b></div><div class="side-item"><span>Rascunho</span><b>preparado</b></div><div class="side-item"><span>Envio externo</span><b>{submission_label}</b></div><div class="side-item"><span>Login e desafios</span><b>manual</b></div></div></aside>
+<p class="hint"><strong>Nota:</strong> o botão Caçar inicia o processo contínuo. A conta, Google, CAPTCHA e desafios da plataforma continuam sob confirmação manual; {submission_note}</p></section>{review_html}</main>
 <script>
 let selected = null;
 const cards = [...document.querySelectorAll('.platform')];
@@ -292,10 +318,31 @@ setInterval(refresh, 2500); refresh();
 </script></body></html>'''
 
 
+def review_request(root, identifier=None, payload=None):
+    store = OperationsStore(root)
+    try:
+        if identifier:
+            return store.update(identifier, payload) if payload is not None else store.get(identifier)
+        store.import_drafts()
+        data = store.listing()
+        data['legacy'] = []
+        database = Path(root) / 'freelahunter.db'
+        if database.exists():
+            conn = sqlite3.connect(f'file:{database}?mode=ro', uri=True)
+            try:
+                conn.row_factory = sqlite3.Row
+                data['legacy'] = [dict(row) for row in conn.execute("SELECT id,subject,status,outcome_status FROM proposals WHERE status IN ('SENT','SENDING') ORDER BY id DESC LIMIT 100")]
+            finally:
+                conn.close()
+        return data
+    finally:
+        store.close()
+
+
 def create_operator_app(manager: HunterProcessManager | None = None):
     try:
         from fastapi import FastAPI, HTTPException
-        from fastapi.responses import HTMLResponse, JSONResponse
+        from fastapi.responses import HTMLResponse, JSONResponse, Response
     except ImportError:
         return None
 
@@ -320,6 +367,30 @@ def create_operator_app(manager: HunterProcessManager | None = None):
     @app.get("/api/status")
     def status():
         return controller.status()
+
+    @app.get('/review.js')
+    def review_script():
+        return Response((ROOT / 'freelahunter/static/review.js').read_text(), media_type='application/javascript')
+
+    @app.get('/api/review')
+    def reviews():
+        return review_request(controller.root)
+
+    @app.get('/api/review/{identifier}')
+    def review(identifier: str):
+        try:
+            return review_request(controller.root, identifier)
+        except ValueError as error:
+            raise HTTPException(404, str(error)) from error
+
+    @app.post('/api/review/{identifier}')
+    def save_review(identifier: str, payload: dict):
+        try:
+            return review_request(controller.root, identifier, payload)
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from error
+        except RuntimeError as error:
+            raise HTTPException(409, str(error)) from error
 
     @app.post("/api/start/{platform_name}")
     def start(platform_name: str):
@@ -359,7 +430,7 @@ def serve_operator_panel(host: str = "127.0.0.1", port: int = 8765,
 
     class Handler(BaseHTTPRequestHandler):
         def _send(self, payload: Any, status: int = 200, content_type: str = "application/json"):
-            if content_type == "text/html":
+            if content_type in {"text/html", "application/javascript"}:
                 body = payload.encode("utf-8")
             else:
                 body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -375,6 +446,13 @@ def serve_operator_panel(host: str = "127.0.0.1", port: int = 8765,
             path = urlparse(self.path).path
             if path == "/":
                 self._send(_page(controller.platforms), content_type="text/html")
+            elif path == '/review.js':
+                self._send((ROOT / 'freelahunter/static/review.js').read_text(), content_type='application/javascript')
+            elif path == '/api/review' or path.startswith('/api/review/'):
+                try:
+                    self._send(review_request(controller.root, path.rsplit('/', 1)[-1] if path.startswith('/api/review/') else None))
+                except ValueError as error:
+                    self._send({'detail': str(error)}, 404)
             elif path == "/api/status":
                 self._send(controller.status())
             elif path == "/api/platforms":
@@ -387,7 +465,13 @@ def serve_operator_panel(host: str = "127.0.0.1", port: int = 8765,
                 return self._send({"detail": "forbidden"}, 403)
             path = urlparse(self.path).path
             try:
-                if path.startswith("/api/start/"):
+                if path.startswith('/api/review/'):
+                    size = int(self.headers.get('Content-Length', '0'))
+                    if size <= 0 or size > 65536:
+                        raise ValueError('Tamanho da revisão inválido.')
+                    payload = json.loads(self.rfile.read(size))
+                    result = review_request(controller.root, path.rsplit('/', 1)[-1], payload)
+                elif path.startswith("/api/start/"):
                     result = controller.start(unquote(path.rsplit("/", 1)[-1]))
                 elif path == "/api/stop":
                     result = controller.stop()

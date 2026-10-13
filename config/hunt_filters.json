@@ -1,0 +1,8 @@
+{
+  "technologies": ["python", "fastapi", "api", "javascript", "typescript", "react", "next.js", "wordpress", "html", "css", "sql", "n8n", "automação", "backend", "frontend", "landing page"],
+  "require_technology": true,
+  "excluded_terms": ["apostas", "disparo em massa"],
+  "minimum_budget": {"BRL": 500, "USD": 100, "EUR": 100, "GBP": 80},
+  "minimum_description_length": 30,
+  "minimum_score": 30
+}

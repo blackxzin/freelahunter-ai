@@ -53,7 +53,7 @@ test('snapshot do Upwork detecta USD e prazos em inglês', async ({ page }) => {
   }, 'upwork');
   expect(snapshot.currency).toBe('USD');
   expect(snapshot.budget_max).toBe(3000);
-  expect(snapshot.deadline_days).toBe(2);
+  expect(snapshot.deadline_days).toBe(14);
 });
 
 test('trava de envio reconhece mensagem idêntica mesmo com espaços diferentes', () => {

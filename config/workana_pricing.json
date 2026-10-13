@@ -1,0 +1,42 @@
+{
+  "hourly_rate": 45,
+  "minimum_price": 500,
+  "proposal_price_floor": 900,
+  "proposal_price_ceiling": 6000,
+  "productive_team_hours_per_day": 6,
+  "risk_buffer": 0.25,
+  "qa_fraction": 0.2,
+  "feedback_business_days": 2,
+  "fee_fraction": 0.2,
+  "adjustments": {
+    "complexity_per_integration": 0.04,
+    "complexity_per_screen": 0.02,
+    "urgent_deadline_days": 3,
+    "urgent_multiplier": 0.15,
+    "recurring_client_multiplier": -0.05,
+    "good_history_multiplier": -0.03,
+    "min_multiplier": 0.85,
+    "max_multiplier": 1.5
+  },
+  "currency": "BRL",
+  "currency_overrides": {
+    "EUR": {
+      "hourly_rate": 42,
+      "minimum_price": 500,
+      "proposal_price_floor": 850,
+      "proposal_price_ceiling": 5600
+    },
+    "GBP": {
+      "hourly_rate": 36,
+      "minimum_price": 450,
+      "proposal_price_floor": 750,
+      "proposal_price_ceiling": 5000
+    },
+    "USD": {
+      "hourly_rate": 45,
+      "minimum_price": 500,
+      "proposal_price_floor": 900,
+      "proposal_price_ceiling": 6000
+    }
+  }
+}

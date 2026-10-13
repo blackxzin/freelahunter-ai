@@ -9,7 +9,7 @@
     "budget": ["[data-budget-max]", "[itemprop='price']", ".box-project-view-info"],
     "deadline": ["[data-deadline-days]", ".box-project-view-info"],
     "client": [".info-usuario.cliente .info-usuario-nome .name", "[itemprop='author']"],
-    "client_link": [".info-usuario.cliente a[href*='/users/']", "a[href*='/user/']"]
+    "client_link": [".info-usuario.cliente a[href*='/users/']", ".info-usuario.cliente a[href*='/user/']", "a[href*='/user/']"]
   },
   "proposal": {
     "question_link": ["a[href*='/project/message/']"],

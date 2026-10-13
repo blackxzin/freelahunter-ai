@@ -57,13 +57,18 @@ export async function readSnapshot(page, selectorSet = selectors, platformName =
   const deadlineText = deadlineNode ? await deadlineNode.innerText().catch(() => '') : '';
   const budgetRaw = budgetNode ? await budgetNode.getAttribute('data-budget-max') || await budgetNode.getAttribute('content') : null;
   const deadlineRaw = deadlineNode ? await deadlineNode.getAttribute('data-deadline-days') || await deadlineNode.getAttribute('content') : null;
-  const budgetMatches = [...budgetText.matchAll(/(?:R\$|US\$|\$|€|EUR|BRL|USD|GBP)\s*[\d.,]+/gi)];
+  const budgetMatches = [...budgetText.matchAll(/(?:R\$|US\$|\$|€|£|EUR|BRL|USD|GBP)\s*[\d.,]+/gi)];
   const currency = /(?:€|EUR)/i.test(budgetText) ? 'EUR'
     : /(?:£|GBP)/i.test(budgetText) ? 'GBP'
+      : /(?:R\$|BRL)/i.test(budgetText) ? 'BRL'
       : /(?:US\$|\$|USD)/i.test(budgetText) ? 'USD'
         : platformName === 'upwork' ? 'USD' : 'BRL';
-  const budget = parseAmount(budgetRaw) || parseAmount(budgetMatches.at(-1)?.[0]);
-  const deadline = Number(deadlineRaw) || Number((deadlineText.match(/(\d+)\s*(?:dias?|days?|weeks?)/i) || [])[1] || 0);
+  const range = budgetText.match(/(?:R\$|US\$|\$|€|£|EUR|BRL|USD|GBP)\s*[\d.,]+\s*(?:-|–|—|a|to|até)\s*([\d.,]+)/i);
+  const hourly = /(?:\/\s*(?:h\b|hr\b|hora)|\b(?:hourly|per hour|por hora)\b)/i.test(budgetText);
+  const budget = hourly ? 0 : parseAmount(budgetRaw) || parseAmount(range?.[1] || budgetMatches.at(-1)?.[0]);
+  const duration = deadlineText.match(/(\d+)(?:\s*[-–]\s*(\d+))?\s*(dias?|days?|weeks?|semanas?)/i);
+  const deadline = Number(deadlineRaw) || (duration
+    ? Number(duration[2] || duration[1]) * (/week|semana/i.test(duration[3]) ? 7 : 1) : 0);
   const client = clientNode ? (await clientNode.textContent()).trim() : '';
   const clientUrl = clientLink ? await clientLink.getAttribute('href') : '';
   return { title: title.trim(), description, client, url: page.url(), platform: platformName, currency, budget_text: budgetText, is_premium: isPremium,

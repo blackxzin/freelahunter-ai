@@ -1,0 +1,66 @@
+{
+  "listing": {
+    "links": [
+      ".project-title a[href*='/job/']",
+      "a[href*='/job/']"
+    ]
+  },
+  "job": {
+    "title": [
+      "h1.project-title",
+      "h1"
+    ],
+    "description": [
+      ".project-description .html-desc",
+      ".project-description .expander",
+      ".project-description [itemprop=\"description\"]",
+      "[itemprop=\"description\"]",
+      ".project-description"
+    ],
+    "premium_badge": [],
+    "budget": [
+      ".project-budget",
+      ".budget",
+      "[itemprop=\"baseSalary\"]"
+    ],
+    "deadline": [
+      ".project-deadline",
+      ".deadline"
+    ],
+    "client": [
+      ".client-info .user-name",
+      ".client-info .name",
+      ".project-author .name"
+    ],
+    "client_link": [
+      ".client-info a[href*='/client/']",
+      ".project-author a[href*='/client/']"
+    ]
+  },
+  "proposal": {
+    "question_link": [],
+    "bid_link": [],
+    "message": [],
+    "subject": [],
+    "price": [],
+    "final_price": [],
+    "duration": [],
+    "question": [],
+    "submit_question": [],
+    "submit_proposal": [],
+    "confirmations": [],
+    "continue_modal": []
+  },
+  "conversation": {
+    "link": [],
+    "message": []
+  },
+  "inbox": {
+    "row": [],
+    "timestamp": [],
+    "project": [],
+    "client": [],
+    "preview": [],
+    "sent": []
+  }
+}
