@@ -19,7 +19,7 @@ def main() -> None:
     profile = ProfileService(str(profile_path)).load()
     result = build_quote(snapshot, profile)
     if result.get('action') == 'proposal':
-        draft = ProposalDraft(0, result.get('subject', ''), result.get('message') if result.get('action') == 'proposal' else result.get('question', ''), result.get('estimated_hours') or 0, result.get('suggested_price'), result.get('questions', []))
+        draft = ProposalDraft(0, result.get('subject', ''), result.get('message') if result.get('action') == 'proposal' else result.get('question', ''), result.get('estimated_hours') or 0, result.get('suggested_price'), result.get('questions', []), currency=result.get('currency'))
         status, reasons = ProposalValidator().validate(draft, profile)
         result['validation_status'] = status
         result['validation_reasons'] = reasons

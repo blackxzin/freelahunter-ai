@@ -43,7 +43,7 @@ def detect_currency(snapshot, profile, settings):
         return 'EUR'
     if re.search(r'£|\bGBP\b', text, re.IGNORECASE):
         return 'GBP'
-    if re.search(r'US\$|\$|\bUSD\b', text, re.IGNORECASE):
+    if re.search(r'US\$|(?<!R)\$|\bUSD\b', text, re.IGNORECASE):
         return 'USD'
     if re.search(r'R\$|\bBRL\b', text, re.IGNORECASE):
         return 'BRL'
@@ -78,9 +78,8 @@ def build_quote(snapshot, profile, settings=None):
         settings = json.loads(pricing_path.read_text(encoding='utf-8'))
     currency = detect_currency(snapshot, profile, settings)
     overrides = settings.get('currency_overrides', {}).get(currency, {})
-    if overrides:
-        settings = dict(settings)
-        settings.update(overrides)
+    settings = dict(settings)
+    settings.update(overrides)
     settings['currency'] = currency
     english = str(getattr(profile, 'locale', '')).lower().startswith('en')
     for key in ('hourly_rate', 'minimum_price', 'productive_team_hours_per_day'):
@@ -270,7 +269,7 @@ def build_quote(snapshot, profile, settings=None):
                         'the price is negotiable based on the final details, scope, and priorities. '
                         'We can align the milestones and adjust the proposal here on Upwork.')
         else:
-            message += (f' Como proposta inicial para esse escopo, indicamos {format_brl(initial_price)} e prazo de até '
+            message += (f' Como proposta inicial para esse escopo, indicamos {format_money(initial_price, currency)} e prazo de até '
                         f'{initial_days} dias corridos, incluindo testes e uma rodada de revisão. Esse é um valor de '
                         'referência. O valor pode ser combinado e o preço pode ser negociado conforme os detalhes finais, '
                         'o escopo e as prioridades '
@@ -285,7 +284,7 @@ def build_quote(snapshot, profile, settings=None):
                                 'Paid APIs, hosting, domains, and services remain in the client account.')
         else:
             fallback_message = (opening + f' Pelo serviço descrito, consideramos inicialmente {fallback_scope}. '
-                                f'Com base nessas entregas, nossa estimativa preliminar é de {format_brl(initial_price)}, '
+                                f'Com base nessas entregas, nossa estimativa preliminar é de {format_money(initial_price, currency)}, '
                                 f'com prazo de até {initial_days} dias corridos. O preço pode ser negociado conforme os '
                                 'detalhes finais, prioridades e critérios de aceite; depois de confirmar o escopo, '
                                 'ajustamos a proposta. Somos flexíveis para dividir a entrega em etapas verificáveis, '

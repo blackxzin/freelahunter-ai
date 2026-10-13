@@ -137,19 +137,22 @@ class HunterProcessManager:
             env = hunter_environment(platform)
             self._logs.clear()
             self._logs.append(f"Iniciando {platform.label}: {platform.max_jobs} vaga(s) por ciclo; intervalo de {platform.interval_minutes} min.")
-            process = subprocess.Popen(
-                hunter_command(self.root),
-                cwd=self.root,
-                env=env,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                bufsize=1,
-                start_new_session=True,
-            )
+            try:
+                process = subprocess.Popen(
+                    hunter_command(self.root),
+                    cwd=self.root,
+                    env=env,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    bufsize=1,
+                    start_new_session=True,
+                )
+            except OSError as error:  # e.g. node not installed
+                raise RuntimeError(f"Não foi possível iniciar o Node: {error}") from error
             self._process = process
             self._platform = platform_name
             self._started_at = time.time()
@@ -351,7 +354,10 @@ def serve_operator_panel(host: str = "127.0.0.1", port: int = 8765,
         uvicorn = None
     app = create_operator_app(controller)
     if app is not None and uvicorn is not None:
-        uvicorn.run(app, host=host, port=port)
+        try:
+            uvicorn.run(app, host=host, port=port)
+        finally:
+            controller.stop()
         return
 
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer

@@ -34,15 +34,19 @@ def main():
     days = db.conn.execute('''SELECT substr(COALESCE(sent_at, first_seen_at),1,10), COUNT(*)
         FROM proposals LEFT JOIN jobs ON jobs.id=proposals.job_id GROUP BY 1 ORDER BY 1''').fetchall()
     jobs = db.conn.execute('SELECT substr(first_seen_at,1,10), COUNT(*) FROM jobs GROUP BY 1 ORDER BY 1').fetchall()
-    groups = db.conversion_report()['groups']
-    group_rows = ''.join('<tr>' + ''.join(f'<td>{html.escape(str(value))}</td>' for value in row) + '</tr>' for row in groups)
+    # Best converting type/price band first, so pricing.json tweaks start from evidence.
+    groups = sorted(db.conversion_report()['groups'], key=lambda r: ((r[4] or 0) / r[2], (r[3] or 0) / r[2]), reverse=True)
+    group_rows = ''.join(
+        '<tr>' + ''.join(f'<td>{html.escape(str(value or 0))}</td>' for value in row)
+        + f'<td>{(row[3] or 0) / row[2]:.0%}</td><td>{(row[4] or 0) / row[2]:.0%}</td></tr>'
+        for row in groups)
     document = f'''<!doctype html><html lang="pt-BR"><meta charset="utf-8"><title>FreelaHunter Dashboard</title>
     <style>body{{font:16px system-ui;max-width:1100px;margin:32px auto;padding:0 16px;color:#202124}}.cards{{display:flex;gap:12px;flex-wrap:wrap}}.card{{border:1px solid #ddd;border-radius:10px;padding:16px;min-width:150px}}.value{{font-size:28px;font-weight:700}}table{{border-collapse:collapse;width:100%;margin:12px 0 28px}}td,th{{border-bottom:1px solid #ddd;padding:8px;text-align:left}}.bar{{background:#5865f2;color:#fff;padding:4px 8px;border-radius:4px;min-width:24px}}</style>
     <h1>FreelaHunter</h1><p>Gerado localmente a partir do SQLite.</p>
     <div class="cards"><div class="card">Enviadas<div class="value">{sent}</div></div><div class="card">Respostas<div class="value">{responded}</div></div><div class="card">Taxa resposta<div class="value">{response_rate:.1%}</div></div><div class="card">Aceitas<div class="value">{accepted}</div></div><div class="card">Conversão<div class="value">{conversion_rate:.1%}</div></div><div class="card">Dias até resposta<div class="value">{(avg_days or 0):.1f}</div></div></div>
     <h2>Vagas por dia</h2><table><tr><th>Dia</th><th>Quantidade</th></tr>{bar_rows(jobs)}</table>
     <h2>Propostas por dia</h2><table><tr><th>Dia</th><th>Quantidade</th></tr>{bar_rows(days)}</table>
-    <h2>Conversão por tipo e preço</h2><table><tr><th>Tipo</th><th>Faixa</th><th>Enviadas</th><th>Respondidas</th><th>Aceitas</th><th>Recusadas</th></tr>{group_rows}</table>
+    <h2>Conversão por tipo e preço</h2><table><tr><th>Tipo</th><th>Faixa</th><th>Enviadas</th><th>Respondidas</th><th>Aceitas</th><th>Recusadas</th><th>Taxa resposta</th><th>Conversão</th></tr>{group_rows}</table>
     </html>'''
     output = Path(args.output); output.parent.mkdir(parents=True, exist_ok=True); output.write_text(document, encoding='utf-8')
     print(output)

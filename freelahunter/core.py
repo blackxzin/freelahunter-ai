@@ -81,7 +81,7 @@ class Analysis:
 
 @dataclass
 class ProposalDraft:
-    job_id: int; subject: str; message: str; estimated_hours: int; suggested_price: float|None; questions: list[str]; generated_at: str=field(default_factory=now); generation_model: str='mock'; validation_status: str='PENDING'; id: int|None=None
+    job_id: int; subject: str; message: str; estimated_hours: int; suggested_price: float|None; questions: list[str]; generated_at: str=field(default_factory=now); generation_model: str='mock'; validation_status: str='PENDING'; id: int|None=None; currency: str|None=None
 
 class ProviderCapabilities:
     def __init__(self, search=True, details=True, authorized_send=False, status_tracking=False): self.search=search; self.details=details; self.authorized_send=authorized_send; self.status_tracking=status_tracking
@@ -171,7 +171,7 @@ class ProposalGenerator:
         message = quote['question'] if quote['action'] == 'question' else quote['message']
         return ProposalDraft(job.id or 0, quote['subject'], message,
                              quote['estimated_hours'] or 0, quote['suggested_price'],
-                             quote['questions'])
+                             quote['questions'], currency=quote['currency'])
 
 class ProposalValidator:
     BAD=['[CLIENT]','[PROJECT]','TODO','INSERT HERE','{{name}}']
@@ -188,8 +188,11 @@ class ProposalValidator:
             return ()
         if not math.isfinite(amount) or amount < 0:
             return ()
+        from .quoting import format_money
         if str(currency).upper() == 'USD':
             return f'$ {amount:,.2f}'.lower(), f'${amount:,.2f}'.lower(), f'usd {amount:,.2f}'.lower()
+        if str(currency).upper() in {'EUR', 'GBP'}:
+            return (format_money(amount, currency).lower(),)
         english = f'R$ {amount:,.2f}'
         brazilian = english.replace(',', '_').replace('.', ',').replace('_', '.')
         return english.lower(), brazilian.lower()
@@ -209,7 +212,7 @@ class ProposalValidator:
         if not any(term in low for term in negotiation_terms):
             reasons.append('proposal does not say that the price is negotiable' if english else 'proposta não informa que o valor pode ser negociado')
         if proposal.suggested_price is not None:
-            variants = self._price_variants(proposal.suggested_price, getattr(profile, 'currency', 'BRL'))
+            variants = self._price_variants(proposal.suggested_price, getattr(proposal, 'currency', None) or getattr(profile, 'currency', 'BRL'))
             if not variants or not any(variant in low for variant in variants):
                 reasons.append('proposal does not present the suggested price' if english else 'proposta não apresenta o preço sugerido')
         known={x.lower() for x in profile.skills}
@@ -254,7 +257,7 @@ class CircuitBreaker:
 
 class Config:
     def __init__(self, environ=None):
-        e=environ or os.environ
+        e=os.environ if environ is None else environ
         def b(k,d): return e.get(k,d).lower() in ('1','true','yes','on')
         self.dry_run=b('DRY_RUN','true'); self.auto_send=b('AUTO_SEND','false'); self.kill_switch=b('AUTO_SEND_KILL_SWITCH','true'); self.automation_mode=e.get('AUTOMATION_MODE','SEMI_AUTO'); self.interval=int(e.get('HUNT_INTERVAL_MINUTES','15')); self.min_score=int(e.get('AUTO_SEND_MIN_SCORE','85')); self.min_confidence=float(e.get('MIN_CONFIDENCE','0.75')); self.max_hour=int(e.get('MAX_PROPOSALS_PER_HOUR','3')); self.max_day=int(e.get('MAX_PROPOSALS_PER_DAY','10')); self.pause_no_response_days=int(e.get('PAUSE_NO_RESPONSE_DAYS','7')); self.pause_consecutive_no_response=int(e.get('PAUSE_CONSECUTIVE_NO_RESPONSE','5')); self.pause_rejection_threshold=float(e.get('PAUSE_REJECTION_THRESHOLD','0.6'))
     def warnings(self):
@@ -524,7 +527,7 @@ class Database:
         cutoff = datetime.now(timezone.utc).timestamp() - no_response_days * 86400
         old_pending = self.conn.execute('''SELECT outcome_status FROM proposals
             WHERE sent_at IS NOT NULL AND outcome_status='awaiting_response'
-            AND strftime('%s', sent_at) < ? ORDER BY sent_at DESC''', (cutoff,)).fetchall()
+            AND CAST(strftime('%s', sent_at) AS INTEGER) < ? ORDER BY sent_at DESC''', (cutoff,)).fetchall()
         consecutive = 0
         for row in old_pending:
             consecutive += 1
@@ -581,11 +584,12 @@ class Database:
             FROM proposals WHERE sent_at IS NOT NULL''').fetchone()
         groups = self.conn.execute('''SELECT COALESCE(project_type,'não classificado'),
             COALESCE(price_band,'não classificado'), COUNT(*),
-            SUM(outcome_status='responded'), SUM(outcome_status='accepted'), SUM(outcome_status='rejected')
+            SUM(outcome_status IN ('responded','accepted','rejected')), SUM(outcome_status='accepted'), SUM(outcome_status='rejected')
             FROM proposals WHERE sent_at IS NOT NULL GROUP BY project_type, price_band ORDER BY 1,2''').fetchall()
         return {'summary': summary, 'groups': groups}
 
     def client_history(self, client_key):
+        client_key = normalize_client_key(client_key)
         if not client_key:
             return {'recurring': False, 'good_history': False, 'known': False}
         rows = self.conn.execute('''SELECT outcome_status FROM proposals WHERE client_key=?''', (client_key,)).fetchall()
@@ -599,6 +603,7 @@ class Database:
         }
 
     def scope_context(self, client_key=None, conversation_id=None, limit=20):
+        client_key = normalize_client_key(client_key)
         if not client_key and not conversation_id:
             return []
         if conversation_id:

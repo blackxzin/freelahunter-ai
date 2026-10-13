@@ -60,7 +60,7 @@ export async function readSnapshot(page, selectorSet = selectors, platformName =
   const budgetMatches = [...budgetText.matchAll(/(?:R\$|US\$|\$|€|EUR|BRL|USD|GBP)\s*[\d.,]+/gi)];
   const currency = /(?:€|EUR)/i.test(budgetText) ? 'EUR'
     : /(?:£|GBP)/i.test(budgetText) ? 'GBP'
-      : /(?:US\$|\$|USD)/i.test(budgetText) ? 'USD'
+      : /(?:US\$|(?<!R)\$|USD)/i.test(budgetText) ? 'USD'
         : platformName === 'upwork' ? 'USD' : 'BRL';
   const budget = parseAmount(budgetRaw) || parseAmount(budgetMatches.at(-1)?.[0]);
   const deadline = Number(deadlineRaw) || Number((deadlineText.match(/(\d+)\s*(?:dias?|days?|weeks?)/i) || [])[1] || 0);

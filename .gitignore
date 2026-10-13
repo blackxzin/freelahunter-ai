@@ -10,3 +10,4 @@ playwright-report/
 browser-profile/
 state/
 reports/
+.venv/
