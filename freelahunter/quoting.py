@@ -78,9 +78,8 @@ def build_quote(snapshot, profile, settings=None):
         settings = json.loads(pricing_path.read_text(encoding='utf-8'))
     currency = detect_currency(snapshot, profile, settings)
     overrides = settings.get('currency_overrides', {}).get(currency, {})
-    if overrides:
-        settings = dict(settings)
-        settings.update(overrides)
+    settings = dict(settings)
+    settings.update(overrides)
     settings['currency'] = currency
     english = str(getattr(profile, 'locale', '')).lower().startswith('en')
     for key in ('hourly_rate', 'minimum_price', 'productive_team_hours_per_day'):

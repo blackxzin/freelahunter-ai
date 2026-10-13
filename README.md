@@ -15,6 +15,18 @@ npm install
 npm run test:browser
 ```
 
+### Arch Linux
+
+O Arch bloqueia `pip install` no Python do sistema (PEP 668) e o
+`playwright install --with-deps` só conhece apt; use venv e as dependências do pacman:
+
+```bash
+sudo pacman -S --needed python nodejs npm nss alsa-lib at-spi2-core libxkbcommon libxcomposite libxdamage libxrandr mesa
+python -m venv .venv && source .venv/bin/activate   # os scripts Node chamam `python`: deixe o venv ativo
+python -m pip install -r requirements-dev.txt
+npm install && npx playwright install chromium        # sem --with-deps
+```
+
 Caça assistida no Chromium (login manual):
 
 ```bash
