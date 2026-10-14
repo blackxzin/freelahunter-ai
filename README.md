@@ -86,7 +86,7 @@ arquivado) são replicados em `freelahunter.db`, alimentando relatório, circuit
 de pausa e escolha de estilo. A ordem de caça prioriza vagas nunca vistas e,
 entre elas, tipos de projeto com melhor taxa de resposta histórica.
 
-Monitor de respostas no Discord e/ou webhook (sem responder clientes automaticamente):
+Monitor de respostas no Discord (sem responder clientes automaticamente):
 
 ```bash
 npm run monitor:inbox
@@ -95,11 +95,7 @@ python scripts/proposal_tracking.py report
 python scripts/dashboard.py
 ```
 
-Defina `DISCORD_WEBHOOK_URL` e/ou `NOTIFY_WEBHOOK_URL` em `.env`. O webhook
-recebe JSON (`{event, source, timestamp, data}`) e serve para um fluxo n8n
-encaminhar ao WhatsApp ou registrar no CRM; além de `client_reply`, o caçador
-envia `proposal_sent`, `message_sent` e `automation_paused`. `NOTIFY_WEBHOOK_TOKEN`
-vai no cabeçalho `Authorization: Bearer`. `INBOX_POLL_SECONDS` controla o intervalo
+Defina `DISCORD_WEBHOOK_URL` em `.env`. `INBOX_POLL_SECONDS` controla o intervalo
 (mínimo de 20 segundos). O monitor usa a sessão manual do Chromium, alerta
 somente conversa não lida do cliente e inclui link para responder dentro do
 99Freelas. Falhas temporárias do Discord são repetidas com backoff, falhas de

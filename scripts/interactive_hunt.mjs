@@ -12,7 +12,6 @@ import { saveDraft } from './draft_store.mjs';
 import { navigateWithRetry, browserDisconnected } from './recovery.mjs';
 import { loadLocalEnv } from './local_env.mjs';
 import { sendDiscordNotification } from './discord_notify.mjs';
-import { notifyWebhook } from './webhook_notify.mjs';
 import { isAccessChallenge, selectUpworkGoogleAccount, waitForManualAccess } from './access_guard.mjs';
 
 const rl = createInterface({ input, output });
@@ -170,17 +169,8 @@ async function prepareFallbackMessage(page, jobUrl, draft) {
 }
 
 async function notifyPause(reason) {
-  await notifyWebhook('automation_paused', { platform: platform.name, reason });
   if (!process.env.DISCORD_WEBHOOK_URL) return;
   await sendDiscordNotification(process.env.DISCORD_WEBHOOK_URL, `⏸️ FreelaHunter pausado: ${reason}`);
-}
-
-function sentEvent(kind, result, price, pageUrl) {
-  return notifyWebhook(kind === 'message' ? 'message_sent' : 'proposal_sent', {
-    platform: platform.name, title: result.snapshot.title, job_url: result.snapshot.url,
-    client: result.snapshot.client || null, price: price ?? null, currency: result.snapshot.currency || null,
-    variant: result.draft.template_variant || null, page_url: pageUrl,
-  });
 }
 
 async function visibleLocator(page, selectors) {
@@ -594,13 +584,11 @@ async function main() {
           markSent(tracked.proposal_id, `question-${tracked.proposal_id}`, conversationIdFromUrl(jobPage.url()));
           operations('sent', { url: result.snapshot.url });
           cycleSent += 1;
-          await sentEvent('message', result, sendPrice, jobPage.url());
           console.log(`${fallbackFromProposalLimit ? 'MENSAGEM FALLBACK' : 'MENSAGEM'} CONFIRMADA na conversa: ${jobPage.url()}`);
         } else if (response?.ok()) {
           markSent(tracked.proposal_id, `proposal-${tracked.proposal_id}`, conversationIdFromUrl(jobPage.url()));
           operations('sent', { url: result.snapshot.url });
           cycleSent += 1;
-          await sentEvent('proposal', result, sendPrice, jobPage.url());
           console.log(`ENVIO CONFIRMADO pelo site (HTTP ${response.status()}). Página atual: ${jobPage.url()}`);
         } else {
           console.log('Clique realizado, mas sem confirmação inequívoca do site; o bot não repetirá automaticamente.');

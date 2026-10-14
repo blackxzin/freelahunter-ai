@@ -6,7 +6,6 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { loadLocalEnv } from './local_env.mjs';
 import { sendDiscordNotification } from './discord_notify.mjs';
-import { sendWebhookEvent } from './webhook_notify.mjs';
 import { selectors } from './selectors.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -18,7 +17,6 @@ const configuredInterval = Number(process.env.INBOX_POLL_SECONDS || 60);
 const intervalSeconds = Number.isFinite(configuredInterval) ? Math.max(20, configuredInterval) : 60;
 const initializeOnly = process.env.INBOX_INITIALIZE_ONLY === 'true';
 const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
-const eventWebhookUrl = process.env.NOTIFY_WEBHOOK_URL;
 const maxSeenEntries = 5000;
 
 export function messageKey(conversation) {
@@ -35,30 +33,6 @@ export function formatDiscordAlert(conversation) {
   return ['🔔 Nova resposta no 99Freelas', '', `Cliente: ${conversation.client || 'Não identificado'}`,
     `Projeto: ${conversation.project || 'Não identificado'}`, '', `Mensagem: ${preview || '(sem prévia)'}`, '',
     `Abrir conversa: ${conversation.url}`].join('\n');
-}
-
-export function replyEvent(conversation) {
-  return {
-    platform: '99freelas', conversation_id: conversation.id, client: conversation.client || null,
-    project: conversation.project || null,
-    preview: conversation.preview.replace(/\s+/g, ' ').trim().slice(0, 900), url: conversation.url,
-    received_at: conversation.timestamp || null,
-  };
-}
-
-// Deliver to every configured channel; true when at least one accepted it.
-export async function deliverAlert(conversation, { discordUrl = webhookUrl, eventUrl = eventWebhookUrl,
-  discord = sendDiscordNotification, webhook = sendWebhookEvent, log = logEvent } = {}) {
-  let delivered = false;
-  if (discordUrl) {
-    try { await discord(discordUrl, formatDiscordAlert(conversation)); delivered = true; }
-    catch (error) { log('discord_notification_error', { conversation_id: conversation.id, error: error.message }); }
-  }
-  if (eventUrl) {
-    try { await webhook(eventUrl, 'client_reply', replyEvent(conversation)); delivered = true; }
-    catch (error) { log('webhook_notification_error', { conversation_id: conversation.id, error: error.message }); }
-  }
-  return delivered;
 }
 
 function logEvent(event, details = {}) {
@@ -122,7 +96,7 @@ async function scanInbox(page) {
 }
 
 async function main() {
-  if (!webhookUrl && !eventWebhookUrl) throw new Error('Defina DISCORD_WEBHOOK_URL e/ou NOTIFY_WEBHOOK_URL no arquivo .env.');
+  if (!webhookUrl) throw new Error('Defina DISCORD_WEBHOOK_URL no arquivo .env.');
   let context;
   try {
     context = await chromium.launchPersistentContext(profileDir, {
@@ -152,12 +126,14 @@ async function main() {
         }
         if (state.initialized) {
           for (const conversation of incoming) {
-            recordIncomingMessage(conversation);
-            // Not marked as seen when every channel failed, so the next poll retries.
-            if (await deliverAlert(conversation)) {
+            try {
+              recordIncomingMessage(conversation);
+              await sendDiscordNotification(webhookUrl, formatDiscordAlert(conversation));
               state.seen[messageKey(conversation)] = Date.now();
               delivered += 1;
               saveState(state);
+            } catch (error) {
+              logEvent('discord_notification_error', { conversation_id: conversation.id, error: error.message });
             }
           }
         } else {
