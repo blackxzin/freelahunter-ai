@@ -5,14 +5,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from freelahunter.operations import OperationsStore, fingerprint, now
+from freelahunter.operations import OperationsStore, fingerprint, now, order_links, type_response_rates
 
 store = OperationsStore(ROOT)
 try:
     payload = json.load(sys.stdin)
     if sys.argv[1] == 'order':
         checked = {row['url']: row['checked_at'] for row in store.conn.execute('SELECT url,checked_at FROM opportunities')}
-        print(json.dumps(sorted(payload['links'], key=lambda row: checked.get(row['href'], ''))))
+        print(json.dumps(order_links(payload['links'], checked, type_response_rates(ROOT))))
     elif sys.argv[1] == 'sent':
         identifier = fingerprint(payload['url'])
         with store.conn:

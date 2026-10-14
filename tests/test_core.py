@@ -152,13 +152,50 @@ def test_concurrent_workers_cannot_reserve_two_clients(tmp_path):
 
 
 def test_pause_circuit_blocks_after_rejections(tmp_path):
-    db = Database(str(tmp_path / 'pause.db'))
+    db = Database(str(tmp_path / 'pause.db'), environ={})
+    for number in range(5):
+        proposal_id = db.register_proposal(None, f'key-{number}', 'Proposta', 'mensagem', 1000, 'API', 'client')
+        db.mark_sent(f'key-{number}', f'ext-{number}')
+        db.set_proposal_outcome(proposal_id, 'rejected')
+        # Two early rejections are noise, not a trend.
+        assert db.get_automation_state()[0] == (1 if number == 4 else 0)
+    assert db.send_gate()[0] is False
+
+
+def test_rejection_minimum_sample_comes_from_environment(tmp_path):
+    db = Database(str(tmp_path / 'pause-env.db'), environ={'PAUSE_MIN_DECIDED': '2'})
     for number in range(2):
         proposal_id = db.register_proposal(None, f'key-{number}', 'Proposta', 'mensagem', 1000, 'API', 'client')
         db.mark_sent(f'key-{number}', f'ext-{number}')
         db.set_proposal_outcome(proposal_id, 'rejected')
     assert db.get_automation_state()[0] == 1
-    assert db.send_gate()[0] is False
+
+
+def _old_sent(db, count, prefix='k', start_day=1):
+    for n in range(count):
+        db.register_proposal(None, f'{prefix}{n}', 'Proposta', 'm', 1000)
+        db.mark_sent(f'{prefix}{n}', f'e{prefix}{n}')
+        db.conn.execute('UPDATE proposals SET sent_at=? WHERE idempotency_key=?',
+                        (f'2020-01-{start_day + n:02d}T00:00:00+00:00', f'{prefix}{n}'))
+    db.conn.commit()
+
+
+def test_recent_reply_breaks_no_response_streak(tmp_path):
+    db = Database(str(tmp_path / 'streak.db'), environ={})
+    _old_sent(db, 5)
+    newest = db.conn.execute("SELECT id FROM proposals WHERE idempotency_key='k4'").fetchone()[0]
+    db.conn.execute("UPDATE proposals SET outcome_status='responded' WHERE id=?", (newest,))
+    db.conn.commit()
+    assert db.evaluate_pause() is False
+
+
+def test_streak_ignores_old_silence_followed_by_replies(tmp_path):
+    db = Database(str(tmp_path / 'streak-old.db'), environ={})
+    _old_sent(db, 5, 'old', 1)
+    _old_sent(db, 2, 'new', 20)
+    db.conn.execute("UPDATE proposals SET outcome_status='responded' WHERE idempotency_key LIKE 'new%'")
+    db.conn.commit()
+    assert db.evaluate_pause() is False
 
 
 def test_client_gate_blocks_repeat_within_24_hours(tmp_path):

@@ -3,12 +3,73 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import os
 import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
 STATUSES = ('draft', 'sent', 'responded', 'negotiating', 'won', 'lost', 'archived')
+# Panel outcome -> proposal-tracking outcome (freelahunter.db).  The panel is
+# where people record results, so the tracking DB (reports, pause circuit,
+# style selection) must hear about them too.
+TRACKING_OUTCOMES = {'responded': 'responded', 'negotiating': 'responded', 'won': 'accepted',
+                     'lost': 'rejected', 'archived': 'cancelled'}
+log = logging.getLogger(__name__)
+
+
+def type_response_rates(root, minimum=5):
+    """Response rate per project type, for types with at least ``minimum`` sends."""
+    path = tracking_database_path(root)
+    if not path.exists():
+        return {}
+    from .core import Database
+    db = Database(str(path))
+    try:
+        return {kind: row['responded'] / row['sent'] for kind, row in db.project_type_stats().items()
+                if row['sent'] >= minimum}
+    finally:
+        db.conn.close()
+
+
+def order_links(links, checked, rates):
+    """Never-seen jobs first; among them, project types that answer more often.
+
+    ``sorted`` is stable, so the listing's own order (usually newest first)
+    breaks ties.
+    """
+    from .core import classify_project_type
+    return sorted(links, key=lambda row: (checked.get(row['href'], ''),
+                                          -rates.get(classify_project_type(row.get('text')), 0)))
+
+
+def tracking_database_path(root):
+    path = Path(os.environ.get('DATABASE_PATH') or Path(root) / 'freelahunter.db')
+    return path if path.is_absolute() else Path(root) / path
+
+
+def sync_tracking_outcome(root, url, outcome):
+    """Mirror a panel outcome into the tracking DB; never fails the panel save."""
+    target = TRACKING_OUTCOMES.get(outcome)
+    path = tracking_database_path(root)
+    if not target or not url or not path.exists():
+        return False
+    try:
+        from .core import Database, stable_proposal_key
+        db = Database(str(path))
+        try:
+            row = db.conn.execute('''SELECT id,outcome_status FROM proposals
+                WHERE idempotency_key=? AND sent_at IS NOT NULL''', (stable_proposal_key(url),)).fetchone()
+            if not row or row[1] == target:
+                return False
+            db.set_proposal_outcome(row[0], target, 'painel')
+            return True
+        finally:
+            db.conn.close()
+    except Exception as error:  # the panel record is the source of truth
+        log.warning('falha ao sincronizar resultado com o rastreamento: %s', error)
+        return False
 
 
 def now():
@@ -82,7 +143,7 @@ class OperationsStore:
 
     def analysis_key(self, snapshot):
         files = list((self.root / 'config').glob('*.json')) + list((self.root / 'config').glob('*.yaml')) + list((self.root / 'knowledge').glob('*'))
-        files += [self.root / 'freelahunter' / file for file in ('quoting.py', 'core.py', 'knowledge.py', 'operations.py')]
+        files += [self.root / 'freelahunter' / file for file in ('quoting.py', 'copywriting.py', 'core.py', 'knowledge.py', 'operations.py')]
         versions = [(str(p.relative_to(self.root)), hashlib.sha256(p.read_bytes()).hexdigest()) for p in sorted(files) if p.is_file()]
         return fingerprint({'snapshot': snapshot, 'files': versions})
 
@@ -158,6 +219,8 @@ class OperationsStore:
                 raise RuntimeError('O rascunho mudou. Atualize a lista antes de salvar.')
             self.conn.execute('INSERT INTO opportunity_events(opportunity_id,event,details,created_at) VALUES(?,?,?,?)',
                               (identifier, 'reviewed', json.dumps({'outcome': payload.get('outcome', row['outcome']), 'message_edited': 'message' in payload}), now()))
+        if payload.get('outcome') and payload['outcome'] != row['outcome']:
+            sync_tracking_outcome(self.root, row['url'], payload['outcome'])
         return self.get(identifier)
 
     def import_drafts(self):

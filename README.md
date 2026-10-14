@@ -63,7 +63,30 @@ No modo `SEMI_AUTO`, pede `ENVIAR`; no modo `AUTO`, envia somente após todas as
 travas configuráveis passarem. `BROWSER_PROFILE_DIR` pode apontar para um perfil
 separado.
 
-Monitor de respostas no Discord (sem responder clientes automaticamente):
+### Texto das propostas
+
+O texto é montado por regras (`freelahunter/copywriting.py`), sem IA:
+
+- abre pelo problema do cliente, citando título, entregas identificadas e as
+  tecnologias da vaga que também estão no perfil;
+- inclui uma frase de cuidado técnico por tipo de entrega (API, pagamentos,
+  automação, landing page etc.) e, opcionalmente, um projeto do portfólio
+  marcado com `cite: true`;
+- envia no máximo 3 perguntas, das mais importantes para as menos; notas
+  internas (ex.: especialidade a confirmar) ficam só no painel;
+- tem três estilos (A, B, C). A mesma vaga sempre gera o mesmo texto; vagas
+  diferentes são distribuídas entre os estilos. Cada envio grava o estilo
+  (`template_variant`), e `python scripts/proposal_tracking.py report` mostra a
+  taxa de resposta por estilo. Com 15 envios por estilo, o melhor passa a ser
+  usado na maioria das vagas, mantendo 25% de exploração. `PROPOSAL_STYLE=A|B|C`
+  fixa um estilo.
+
+Resultados marcados no painel (respondido, negociando, ganho, perdido,
+arquivado) são replicados em `freelahunter.db`, alimentando relatório, circuito
+de pausa e escolha de estilo. A ordem de caça prioriza vagas nunca vistas e,
+entre elas, tipos de projeto com melhor taxa de resposta histórica.
+
+Monitor de respostas no Discord e/ou webhook (sem responder clientes automaticamente):
 
 ```bash
 npm run monitor:inbox
@@ -72,7 +95,11 @@ python scripts/proposal_tracking.py report
 python scripts/dashboard.py
 ```
 
-Defina `DISCORD_WEBHOOK_URL` em `.env`. `INBOX_POLL_SECONDS` controla o intervalo
+Defina `DISCORD_WEBHOOK_URL` e/ou `NOTIFY_WEBHOOK_URL` em `.env`. O webhook
+recebe JSON (`{event, source, timestamp, data}`) e serve para um fluxo n8n
+encaminhar ao WhatsApp ou registrar no CRM; além de `client_reply`, o caçador
+envia `proposal_sent`, `message_sent` e `automation_paused`. `NOTIFY_WEBHOOK_TOKEN`
+vai no cabeçalho `Authorization: Bearer`. `INBOX_POLL_SECONDS` controla o intervalo
 (mínimo de 20 segundos). O monitor usa a sessão manual do Chromium, alerta
 somente conversa não lida do cliente e inclui link para responder dentro do
 99Freelas. Falhas temporárias do Discord são repetidas com backoff, falhas de

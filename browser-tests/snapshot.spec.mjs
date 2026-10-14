@@ -16,7 +16,8 @@ test('isola descrição e gera pergunta em Python sem preço fechado', async ({ 
   expect(draft.action).toBe('question');
   expect(draft.suggested_price).toBeNull();
   expect(draft.question).toContain('podemos combinar um valor justo');
-  expect(draft.question).toContain('equipe de dois desenvolvedores full stack que trabalham juntos');
+  expect(draft.question).toContain('equipe de dois desenvolvedores full stack');
+  expect(hasPriorProjectIntroduction([draft.question], 'Automação Python')).toBe(true);
   expect(draft.fallback_price).not.toBeNull();
   expect(draft.fallback_message).toContain('preço pode ser negociado');
 });

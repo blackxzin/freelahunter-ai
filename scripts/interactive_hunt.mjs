@@ -12,6 +12,7 @@ import { saveDraft } from './draft_store.mjs';
 import { navigateWithRetry, browserDisconnected } from './recovery.mjs';
 import { loadLocalEnv } from './local_env.mjs';
 import { sendDiscordNotification } from './discord_notify.mjs';
+import { notifyWebhook } from './webhook_notify.mjs';
 import { isAccessChallenge, selectUpworkGoogleAccount, waitForManualAccess } from './access_guard.mjs';
 
 const rl = createInterface({ input, output });
@@ -96,43 +97,19 @@ function money(value, currency = 'BRL') {
   return currency === 'USD' ? `$${amount}` : currency === 'EUR' ? `€${amount}` : currency === 'GBP' ? `£${amount}` : `R$ ${amount}`;
 }
 
-function forceProposalDraft(draft, snapshot) {
-  if (!forceProposal || draft.action !== 'question' || !Array.isArray(draft.price_range) || !draft.price_range[1]) return draft;
-  const scope = (draft.breakdown || []).slice(0, 5).map((item) => item.deliverable).join('; ') || 'desenvolvimento, testes e entrega documentada';
-  const days = Array.isArray(draft.days_range) && draft.days_range[1]
-    ? Math.ceil((draft.days_range[0] + draft.days_range[1]) / 2) : null;
-  const price = Array.isArray(draft.price_range) && draft.price_range[1]
-    ? Math.ceil(((draft.price_range[0] + draft.price_range[1]) / 2) / 50) * 50 : null;
-  if (price == null) return draft;
-  if (!days) return draft;
-  const title = String(draft.subject || '').replace(/^Proposta:\s*/i, '');
+function forceProposalDraft(draft) {
+  // The Python quote already renders the priced message (same copy engine and
+  // validator markers); the hunter only switches the action.
+  if (!forceProposal || draft.action !== 'question' || !draft.direct_message) return draft;
+  if (draft.fallback_price == null || !draft.fallback_days) return draft;
   draft.action = 'proposal';
   draft.questions = [];
-  draft.suggested_price = price;
-  draft.estimated_days = days;
-  const english = String(snapshot?.platform || '').toLowerCase() === 'upwork';
-  draft.message = english
-    ? `Hi! We are interested in the project "${title}". We understand the delivery includes ${scope}. `
-      + 'We are a two-developer full-stack team working together, with cross-review across frontend and backend. '
-      + 'We propose verifiable milestones covering implementation, testing, and documented handoff. '
-      + `As an initial estimate, we propose ${money(draft.suggested_price, snapshot?.currency)} and up to ${days} calendar days. `
-      + 'The price is negotiable after the final scope and priorities are confirmed. Paid APIs, hosting, domains, and services remain in the client account.'
-    : `Olá! Temos interesse no projeto “${title}”. Entendemos que a entrega envolve ${scope}. `
-      + 'Somos uma equipe de dois desenvolvedores full stack que trabalham juntos. '
-      + 'Propomos executar em etapas verificáveis, com alinhamento, implementação, testes e entrega documentada. '
-      + `Como referência inicial, propomos ${money(draft.suggested_price, snapshot?.currency)} e prazo de até ${days} dias corridos. `
-      + 'O preço pode ser negociado conforme os detalhes finais do escopo e as prioridades do projeto. '
-      + 'APIs, hospedagem, domínio e serviços pagos ficam nas contas do cliente.';
+  draft.message = draft.direct_message;
+  draft.suggested_price = draft.fallback_price;
+  draft.estimated_days = draft.fallback_days;
   draft.validation_status = 'PENDING';
   draft.validation_reasons = ['Estimativa automática preliminar; confirmar escopo com o cliente.'];
   return draft;
-}
-
-function clientHistory(clientKey) {
-  if (!clientKey) return {};
-  const result = spawnSync('python', ['scripts/proposal_tracking.py', 'history', '--client-key', clientKey], { cwd: root, encoding: 'utf8' });
-  if (result.status !== 0) return {};
-  return JSON.parse(result.stdout.trim().split('\n').pop());
 }
 
 function messageGate(clientKey) {
@@ -149,7 +126,8 @@ function proposalGate() {
     '--max-per-day', process.env.MAX_PROPOSALS_PER_DAY || '10',
     '--no-response-days', process.env.PAUSE_NO_RESPONSE_DAYS || '7',
     '--consecutive-no-response', process.env.PAUSE_CONSECUTIVE_NO_RESPONSE || '5',
-    '--rejection-threshold', process.env.PAUSE_REJECTION_THRESHOLD || '0.6'], {
+    '--rejection-threshold', process.env.PAUSE_REJECTION_THRESHOLD || '0.6',
+    '--min-decided', process.env.PAUSE_MIN_DECIDED || '5'], {
     cwd: root, encoding: 'utf8',
   });
   const raw = result.stdout?.trim().split('\n').pop();
@@ -158,13 +136,6 @@ function proposalGate() {
   } catch {
     return { allowed: false, reason: result.stderr || 'falha na trava de propostas' };
   }
-}
-
-function clientContext(clientKey) {
-  if (!clientKey) return [];
-  const result = spawnSync('python', ['scripts/proposal_tracking.py', 'context', '--client-key', clientKey], { cwd: root, encoding: 'utf8' });
-  if (result.status !== 0) return [];
-  return JSON.parse(result.stdout.trim().split('\n').pop()).messages || [];
 }
 
 function claimSend(proposalId) {
@@ -199,8 +170,17 @@ async function prepareFallbackMessage(page, jobUrl, draft) {
 }
 
 async function notifyPause(reason) {
+  await notifyWebhook('automation_paused', { platform: platform.name, reason });
   if (!process.env.DISCORD_WEBHOOK_URL) return;
   await sendDiscordNotification(process.env.DISCORD_WEBHOOK_URL, `⏸️ FreelaHunter pausado: ${reason}`);
+}
+
+function sentEvent(kind, result, price, pageUrl) {
+  return notifyWebhook(kind === 'message' ? 'message_sent' : 'proposal_sent', {
+    platform: platform.name, title: result.snapshot.title, job_url: result.snapshot.url,
+    client: result.snapshot.client || null, price: price ?? null, currency: result.snapshot.currency || null,
+    variant: result.draft.template_variant || null, page_url: pageUrl,
+  });
 }
 
 async function visibleLocator(page, selectors) {
@@ -352,10 +332,9 @@ async function fillJob(page, link) {
   if (inboxContact.found) {
     return { skipped: 'Envio bloqueado: já existe conversa com este cliente na caixa de mensagens.' };
   }
-  snapshot.client_history = clientHistory(snapshot.client_key);
-  snapshot.confirmed_context = clientContext(snapshot.client_key);
-  const draft = forceProposalDraft(generate(snapshot), snapshot);
-  console.log(JSON.stringify({ event: draft.cache_hit ? 'analysis_cached' : 'job_ranked', score: draft.selection?.score, reasons: draft.selection?.reasons, exclusions: draft.selection?.exclusions }));
+  // client history and confirmed scope are filled in by generate_proposal.py
+  const draft = forceProposalDraft(generate(snapshot));
+  console.log(JSON.stringify({ event: draft.cache_hit ? 'analysis_cached' : 'job_ranked', score: draft.selection?.score, variant: draft.template_variant, reasons: draft.selection?.reasons, exclusions: draft.selection?.exclusions }));
   if (draft.outcome && draft.outcome !== 'draft') return { skipped: `Vaga já acompanhada no painel: ${draft.outcome}`, cached: draft.cache_hit };
   if (draft.action === 'skip') return { skipped: draft.reason, cached: draft.cache_hit };
   if (draft.reviewed) return { skipped: 'Revisão manual salva no painel; envio deve ser feito após revisão.', cached: draft.cache_hit };
@@ -577,6 +556,7 @@ async function main() {
       project_type: result.snapshot.category || result.snapshot.title,
       client_key: result.snapshot.client_url || result.snapshot.client,
       validation_status: result.draft.validation_status || 'PENDING',
+      template_variant: result.draft.template_variant,
     });
     if (tracked.already_sent) {
       console.log(`IGNORADA: este cliente/vaga já foi enviado anteriormente — ${item.href}`);
@@ -614,11 +594,13 @@ async function main() {
           markSent(tracked.proposal_id, `question-${tracked.proposal_id}`, conversationIdFromUrl(jobPage.url()));
           operations('sent', { url: result.snapshot.url });
           cycleSent += 1;
+          await sentEvent('message', result, sendPrice, jobPage.url());
           console.log(`${fallbackFromProposalLimit ? 'MENSAGEM FALLBACK' : 'MENSAGEM'} CONFIRMADA na conversa: ${jobPage.url()}`);
         } else if (response?.ok()) {
           markSent(tracked.proposal_id, `proposal-${tracked.proposal_id}`, conversationIdFromUrl(jobPage.url()));
           operations('sent', { url: result.snapshot.url });
           cycleSent += 1;
+          await sentEvent('proposal', result, sendPrice, jobPage.url());
           console.log(`ENVIO CONFIRMADO pelo site (HTTP ${response.status()}). Página atual: ${jobPage.url()}`);
         } else {
           console.log('Clique realizado, mas sem confirmação inequívoca do site; o bot não repetirá automaticamente.');

@@ -81,7 +81,7 @@ class Analysis:
 
 @dataclass
 class ProposalDraft:
-    job_id: int; subject: str; message: str; estimated_hours: int; suggested_price: float|None; questions: list[str]; generated_at: str=field(default_factory=now); generation_model: str='mock'; validation_status: str='PENDING'; id: int|None=None; currency: str|None=None
+    job_id: int; subject: str; message: str; estimated_hours: int; suggested_price: float|None; questions: list[str]; generated_at: str=field(default_factory=now); generation_model: str='mock'; validation_status: str='PENDING'; id: int|None=None; currency: str|None=None; template_variant: str|None=None
 
 class ProviderCapabilities:
     def __init__(self, search=True, details=True, authorized_send=False, status_tracking=False): self.search=search; self.details=details; self.authorized_send=authorized_send; self.status_tracking=status_tracking
@@ -163,22 +163,23 @@ class AIService:
 class ProposalGenerator:
     def generate(self, job, analysis, profile, projects, price=None):
         from .quoting import build_quote
-        quote = build_quote({'title': job.title, 'description': job.description,
-                             'budget_max': job.budget_max, 'deadline_days': job.deadline_days,
-                             'client_history': job.client_history}, profile)
+        quote = build_quote({'title': job.title, 'description': job.description, 'url': job.url,
+                             'platform': job.platform, 'budget_max': job.budget_max,
+                             'deadline_days': job.deadline_days, 'client_history': job.client_history}, profile)
         if quote['action'] == 'skip':
             raise ValueError(quote['reason'])
         message = quote['question'] if quote['action'] == 'question' else quote['message']
         return ProposalDraft(job.id or 0, quote['subject'], message,
                              quote['estimated_hours'] or 0, quote['suggested_price'],
-                             quote['questions'], currency=quote['currency'])
+                             quote['questions'], currency=quote['currency'],
+                             template_variant=quote.get('template_variant'))
 
 class ProposalValidator:
     BAD=['[CLIENT]','[PROJECT]','TODO','INSERT HERE','{{name}}']
     NEGOTIATION_TERMS=('podemos combinar o preço', 'podemos combinar um valor',
                        'podemos negociar o valor', 'valor pode ser negociado',
                        'valor pode ser combinado', 'preço pode ser negociado',
-                       'preço inicial')
+                       'preço inicial', 'preço é negociável', 'valor é negociável')
 
     @staticmethod
     def _price_variants(value, currency='BRL'):
@@ -289,8 +290,22 @@ class RuntimeControl:
 class Database:
     OUTCOME_STATUSES = {'draft', 'awaiting_response', 'responded', 'accepted', 'rejected', 'no_response', 'cancelled'}
 
-    def __init__(self, path=None):
+    def __init__(self, path=None, environ=None):
         path = path or os.getenv('DATABASE_PATH') or 'freelahunter.db'
+        env = os.environ if environ is None else environ
+        def number(key, default, cast):
+            try:
+                return cast(env.get(key, default))
+            except (TypeError, ValueError):
+                return default
+        # Used when the pause circuit is re-evaluated after a reply/outcome,
+        # so it honours the same .env values as the hunt gate.
+        self.pause_settings = {
+            'no_response_days': number('PAUSE_NO_RESPONSE_DAYS', 7, int),
+            'consecutive_limit': number('PAUSE_CONSECUTIVE_NO_RESPONSE', 5, int),
+            'rejection_threshold': number('PAUSE_REJECTION_THRESHOLD', .6, float),
+            'min_decided': number('PAUSE_MIN_DECIDED', 5, int),
+        }
         self.conn = sqlite3.connect(path, check_same_thread=False)
         self.lock = threading.Lock()
         self.conn.execute('PRAGMA busy_timeout=5000')
@@ -328,6 +343,7 @@ class Database:
             'outcome_updated_at': 'TEXT', 'project_type': 'TEXT',
             'conversation_id': 'TEXT', 'client_key': 'TEXT', 'price_band': 'TEXT',
             'send_kind': "TEXT NOT NULL DEFAULT 'proposal'",
+            'template_variant': 'TEXT',
         }
         for name, definition in additions.items():
             if name not in columns:
@@ -357,6 +373,7 @@ class Database:
         self.conn.execute('''CREATE INDEX IF NOT EXISTS idx_messages_conversation ON conversation_messages(conversation_id)''')
         self.conn.execute('''INSERT OR IGNORE INTO automation_state(id, paused, updated_at) VALUES (1, 0, ?)''', (now(),))
         self.conn.execute('INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, ?)', (now(),))
+        self.conn.execute('INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (2, ?)', (now(),))
         for row_id, client_key in self.conn.execute('SELECT id,client_key FROM proposals WHERE client_key IS NOT NULL').fetchall():
             normalized = normalize_client_key(client_key)
             if normalized != client_key:
@@ -422,15 +439,15 @@ class Database:
             except Exception:
                 self.conn.rollback()
                 raise
-    def save_proposal(self,p,key,status='GENERATED', project_type=None, client_key=None, conversation_id=None, price_band=None, send_kind='proposal'):
+    def save_proposal(self,p,key,status='GENERATED', project_type=None, client_key=None, conversation_id=None, price_band=None, send_kind='proposal', template_variant=None):
         project_type = classify_project_type(project_type or p.subject)
         client_key = normalize_client_key(client_key) or None
         if send_kind not in {'proposal', 'message'}:
             raise ValueError('send_kind inválido')
         self.conn.execute('''INSERT INTO proposals(
             job_id,idempotency_key,subject,message,validation_status,status,suggested_price,
-            project_type,client_key,conversation_id,price_band,send_kind
-        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(idempotency_key) DO UPDATE SET
+            project_type,client_key,conversation_id,price_band,send_kind,template_variant
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(idempotency_key) DO UPDATE SET
             subject=excluded.subject, message=excluded.message,
             validation_status=excluded.validation_status,
             status=CASE WHEN proposals.status IN ('SENT', 'SENDING') THEN proposals.status ELSE excluded.status END,
@@ -439,16 +456,19 @@ class Database:
             client_key=COALESCE(excluded.client_key, proposals.client_key),
             conversation_id=COALESCE(excluded.conversation_id, proposals.conversation_id),
             price_band=COALESCE(excluded.price_band, proposals.price_band),
-            send_kind=CASE WHEN proposals.status IN ('SENT', 'SENDING') THEN proposals.send_kind ELSE excluded.send_kind END
-        ''', (p.job_id or None,key,p.subject,p.message,p.validation_status,status,p.suggested_price,project_type,client_key,conversation_id,price_band or classify_price(p.suggested_price),send_kind))
+            send_kind=CASE WHEN proposals.status IN ('SENT', 'SENDING') THEN proposals.send_kind ELSE excluded.send_kind END,
+            template_variant=CASE WHEN proposals.status IN ('SENT', 'SENDING') THEN proposals.template_variant
+                                  ELSE COALESCE(excluded.template_variant, proposals.template_variant) END
+        ''', (p.job_id or None,key,p.subject,p.message,p.validation_status,status,p.suggested_price,project_type,client_key,conversation_id,price_band or classify_price(p.suggested_price),send_kind,template_variant))
         self.conn.commit()
         return self.conn.execute('SELECT id FROM proposals WHERE idempotency_key=?', (key,)).fetchone()[0]
 
     def register_proposal(self, job_id, key, subject, message, price=None, project_type=None,
-                          client_key=None, conversation_id=None, validation_status='PENDING', send_kind='proposal'):
+                          client_key=None, conversation_id=None, validation_status='PENDING', send_kind='proposal',
+                          template_variant=None):
         proposal = ProposalDraft(job_id or 0, subject, message, 0, price, [], validation_status=validation_status)
         return self.save_proposal(proposal, key, 'GENERATED', project_type, client_key, conversation_id,
-                                  classify_price(price), send_kind)
+                                  classify_price(price), send_kind, template_variant)
 
     def mark_sent(self,key,external_id,conversation_id=None):
         sent_at = now()
@@ -521,24 +541,44 @@ class Database:
                           (int(paused), reason if paused else None, now() if paused else None, now()))
         self.conn.commit()
 
-    def evaluate_pause(self, no_response_days=7, consecutive_limit=5, rejection_threshold=.6):
+    def evaluate_pause(self, no_response_days=None, consecutive_limit=None, rejection_threshold=None,
+                       min_decided=None, recent_decided=20):
+        """Pause automation on a real streak of silence or a sustained rejection rate.
+
+        - streak: the most recent proposals old enough to judge (sent more than
+          ``no_response_days`` ago) are walked newest first; any reply breaks
+          the streak, so old history alone never pauses the bot;
+        - rejection: only the last ``recent_decided`` decided outcomes count,
+          and nothing is concluded before ``min_decided`` of them exist.
+        """
+        settings = self.pause_settings
+        no_response_days = settings['no_response_days'] if no_response_days is None else no_response_days
+        consecutive_limit = settings['consecutive_limit'] if consecutive_limit is None else consecutive_limit
+        rejection_threshold = settings['rejection_threshold'] if rejection_threshold is None else rejection_threshold
+        min_decided = settings['min_decided'] if min_decided is None else min_decided
         if self.get_automation_state()[0]:
             return True
         cutoff = datetime.now(timezone.utc).timestamp() - no_response_days * 86400
-        old_pending = self.conn.execute('''SELECT outcome_status FROM proposals
-            WHERE sent_at IS NOT NULL AND outcome_status='awaiting_response'
-            AND CAST(strftime('%s', sent_at) AS INTEGER) < ? ORDER BY sent_at DESC''', (cutoff,)).fetchall()
-        consecutive = 0
-        for row in old_pending:
-            consecutive += 1
-            if consecutive >= consecutive_limit:
-                self.set_automation_pause(True, f'{consecutive} propostas sem resposta há {no_response_days} dias')
-                return True
-        total = self.conn.execute("SELECT COUNT(*) FROM proposals WHERE outcome_status IN ('accepted','rejected')").fetchone()[0]
-        rejected = self.conn.execute("SELECT COUNT(*) FROM proposals WHERE outcome_status='rejected'").fetchone()[0]
-        if total and rejected / total >= rejection_threshold:
-            self.set_automation_pause(True, f'taxa de rejeição {rejected / total:.1%} acima do limite')
+        judged = self.conn.execute('''SELECT outcome_status FROM proposals
+            WHERE sent_at IS NOT NULL AND send_kind='proposal'
+            AND CAST(strftime('%s', sent_at) AS INTEGER) < ? ORDER BY sent_at DESC, id DESC LIMIT ?''',
+            (cutoff, max(consecutive_limit, 1))).fetchall()
+        streak = 0
+        for (outcome,) in judged:
+            if outcome not in ('awaiting_response', 'no_response'):
+                break
+            streak += 1
+        if consecutive_limit > 0 and streak >= consecutive_limit:
+            self.set_automation_pause(True, f'{streak} propostas seguidas sem resposta há mais de {no_response_days} dias')
             return True
+        decided = [row[0] for row in self.conn.execute('''SELECT outcome_status FROM proposals
+            WHERE outcome_status IN ('accepted','rejected')
+            ORDER BY COALESCE(outcome_updated_at, sent_at) DESC, id DESC LIMIT ?''', (recent_decided,))]
+        if len(decided) >= max(min_decided, 1):
+            rate = decided.count('rejected') / len(decided)
+            if rate >= rejection_threshold:
+                self.set_automation_pause(True, f'taxa de rejeição {rate:.1%} nas últimas {len(decided)} decisões acima do limite')
+                return True
         return False
 
     def send_gate(self, max_per_hour=3, max_per_day=10):
@@ -586,7 +626,25 @@ class Database:
             COALESCE(price_band,'não classificado'), COUNT(*),
             SUM(outcome_status IN ('responded','accepted','rejected')), SUM(outcome_status='accepted'), SUM(outcome_status='rejected')
             FROM proposals WHERE sent_at IS NOT NULL GROUP BY project_type, price_band ORDER BY 1,2''').fetchall()
-        return {'summary': summary, 'groups': groups}
+        variants = self.conn.execute('''SELECT COALESCE(template_variant,'sem variante'), COUNT(*),
+            SUM(outcome_status IN ('responded','accepted','rejected')), SUM(outcome_status='accepted')
+            FROM proposals WHERE sent_at IS NOT NULL GROUP BY 1 ORDER BY 1''').fetchall()
+        return {'summary': summary, 'groups': groups, 'variants': variants}
+
+    def style_stats(self):
+        """Sent/responded counts per copy style, for copywriting.choose_style."""
+        rows = self.conn.execute('''SELECT template_variant, COUNT(*),
+            SUM(outcome_status IN ('responded','accepted','rejected')) FROM proposals
+            WHERE sent_at IS NOT NULL AND template_variant IS NOT NULL GROUP BY template_variant''').fetchall()
+        return {variant: {'sent': sent, 'responded': responded or 0} for variant, sent, responded in rows}
+
+    def project_type_stats(self):
+        """Response rate per project type, used to prioritise similar jobs."""
+        rows = self.conn.execute('''SELECT COALESCE(project_type,'outro'), COUNT(*),
+            SUM(outcome_status IN ('responded','accepted','rejected')), SUM(outcome_status='accepted')
+            FROM proposals WHERE sent_at IS NOT NULL GROUP BY 1''').fetchall()
+        return {kind: {'sent': sent, 'responded': responded or 0, 'accepted': accepted or 0}
+                for kind, sent, responded, accepted in rows}
 
     def client_history(self, client_key):
         client_key = normalize_client_key(client_key)
@@ -659,13 +717,14 @@ def run_pipeline(provider, db, profile=None, auto_send=False, dry_run=True, kill
             if dup: stats['duplicates']+=1; db.audit('job_duplicate', job_id=job.id); continue
             stats['new']+=1
             if not job_filter.accepts(job): job.status=JobStatus.REJECTED; db.audit('job_filtered', job_id=job.id, details={'reason': 'profile_rules'}); continue
-            stats['filtered']+=1; projects=portfolio.relevant(job,profile); analysis=ai.analyze(job,profile,projects); stats['analyzed']+=1; price,_=PriceEstimator(hourly_rate=100,minimum_project_price=200).estimate((analysis.estimated_hours_min+analysis.estimated_hours_max)//2, budget_max=job.budget_max); p=gen.generate(job,analysis,profile,projects,price); val.validate(p,profile); stats['proposals']+=1; key=stable_proposal_key(job.url, job.external_id, job.title, job.client_key, profile.id)
+            stats['filtered']+=1; projects=portfolio.relevant(job,profile); analysis=ai.analyze(job,profile,projects); stats['analyzed']+=1; p=gen.generate(job,analysis,profile,projects); val.validate(p,profile); stats['proposals']+=1; key=stable_proposal_key(job.url, job.external_id, job.title, job.client_key, profile.id)
             db.audit('proposal_generated', job_id=job.id, details={'validation_status': p.validation_status, 'price': p.suggested_price})
             within_limits=db.send_gate(max_per_hour, max_per_day)[0]
             client_allowed = db.client_send_gate(job.client_key)[0]
             decision=policy.decide(provider,analysis,p,sender,db.already_sent(key),within_limits and client_allowed)
             db.save_proposal(p,key,'READY_TO_SEND' if decision=='AUTO_SEND' else 'REVIEW_REQUIRED',
-                             project_type=job.category or job.title, client_key=job.client_key)
+                             project_type=job.category or job.title, client_key=job.client_key,
+                             template_variant=p.template_variant)
             if decision=='AUTO_SEND':
                 if not db.claim_send(key):
                     stats['review']+=1

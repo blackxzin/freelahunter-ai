@@ -5,6 +5,7 @@ import re
 import unicodedata
 from pathlib import Path
 
+from . import copywriting
 from .knowledge import commercial_advisories
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -48,6 +49,29 @@ def detect_currency(snapshot, profile, settings):
     if re.search(r'US\$|\$|\bUSD\b', text, re.IGNORECASE):
         return 'USD'
     return str(settings.get('currency') or getattr(profile, 'currency', 'BRL')).upper()
+
+
+PLATFORM_LABELS = {'upwork': 'Upwork', 'workana': 'Workana', '99freelas': '99Freelas'}
+
+# Display names for technologies the copy may mention.  A technology is cited
+# only when the job mentions it and the profile lists it as a skill.
+TECHNOLOGY_NAMES = {
+    'python': 'Python', 'fastapi': 'FastAPI', 'django': 'Django', 'flask': 'Flask',
+    'javascript': 'JavaScript', 'typescript': 'TypeScript', 'react': 'React', 'next.js': 'Next.js',
+    'node.js': 'Node.js', 'vue': 'Vue', 'wordpress': 'WordPress', 'html': 'HTML', 'css': 'CSS',
+    'sql': 'SQL', 'postgresql': 'PostgreSQL', 'mysql': 'MySQL', 'docker': 'Docker', 'n8n': 'n8n',
+}
+
+
+def mentioned_technologies(text, profile):
+    skills = {normalized(str(skill)) for skill in getattr(profile, 'skills', []) or []}
+    return [name for key, name in TECHNOLOGY_NAMES.items()
+            if key in skills and re.search(r'(?<!\w)' + re.escape(key) + r'(?!\w)', text)]
+
+
+def scope_question(english):
+    return ('What functionality, inputs, outputs, and acceptance criteria are included in this stage?' if english
+            else 'Quais são as funcionalidades, entradas, saídas e critérios de aceite desta etapa?')
 
 
 # Person-hours for bounded deliverables; rate is an internal assumption.
@@ -138,30 +162,31 @@ def build_quote(snapshot, profile, settings=None):
     effective_hourly_rate = settings['hourly_rate'] * factor
     tasks = [dict(deliverable=name, hours_min=low, hours_max=high)
              for name, pattern, low, high in RULES if re.search(pattern, text)]
-    questions = []
+    task_names = [task['deliverable'] for task in tasks]
+    tagged = []  # (tag, text); copywriting picks what reaches the client
     if len(description.split()) < 35 or not tasks:
-        questions.append('What functionality, inputs, outputs, and acceptance criteria are included in this stage?' if english else 'Quais são as funcionalidades, entradas, saídas e critérios de aceite desta etapa?')
+        tagged.append(('scope', 'What functionality, inputs, outputs, and acceptance criteria are included in this stage?' if english else 'Quais são as funcionalidades, entradas, saídas e critérios de aceite desta etapa?'))
     if re.search(r'integrac|integration|\bapi\b|webhook|automacao|automation', text):
-        questions.append('Which systems need to be integrated, and are documentation, access, and sample data available?' if english else 'Quais sistemas serão integrados e já existem documentação, acessos e exemplos de dados?')
+        tagged.append(('integration', 'Which systems need to be integrated, and are documentation, access, and sample data available?' if english else 'Quais sistemas serão integrados e já existem documentação, acessos e exemplos de dados?'))
     if re.search(r'legado|legacy|refator|refactor|migracao|migration|correc|\bbug\b', text):
-        questions.append('Can we review the current code and reproduce the issue before defining the first milestone?' if english else 'Podemos avaliar o código atual e reproduzir o problema antes de fechar o valor?')
+        tagged.append(('legacy', 'Can we review the current code and reproduce the issue before defining the first milestone?' if english else 'Podemos avaliar o código atual e reproduzir o problema antes de fechar o valor?'))
     if re.search(r'\bsaas\b|marketplace|completo|\bcomplete\b|\bia\b|\bai\b|lora|comfyui', text):
-        questions.append('Which features belong in the first MVP, and which should be deferred to later milestones?' if english else 'Quais funcionalidades entram no primeiro MVP e quais ficam para etapas posteriores?')
+        tagged.append(('mvp', 'Which features belong in the first MVP, and which should be deferred to later milestones?' if english else 'Quais funcionalidades entram no primeiro MVP e quais ficam para etapas posteriores?'))
     if re.search(r'pagamento|payment|checkout|\bpix\b|boleto|cartao|card', text):
-        questions.append('Which payment gateway will be used, and which payment methods, billing rules, payouts, and reconciliation are in scope?' if english else 'Qual gateway de pagamento será usado e quais meios, regras de cobrança, repasse e conciliação entram no escopo?')
+        tagged.append(('payment', 'Which payment gateway will be used, and which payment methods, billing rules, payouts, and reconciliation are in scope?' if english else 'Qual gateway de pagamento será usado e quais meios, regras de cobrança, repasse e conciliação entram no escopo?'))
     if re.search(r'plataforma|platform', text) and not re.search(r'criterios de aceite|acceptance criteria|fluxos detalhados|detailed flows|documentacao funcional|functional documentation', text):
-        questions.append('Which user roles, screens, and workflows are included in the first platform milestone?' if english else 'Quais perfis de usuário, telas e fluxos entram na primeira entrega da plataforma?')
+        tagged.append(('platform', 'Which user roles, screens, and workflows are included in the first platform milestone?' if english else 'Quais perfis de usuário, telas e fluxos entram na primeira entrega da plataforma?'))
     if re.search(r'landing pages', text):
-        questions.append('How many landing pages are required, and will the client provide the layout, copy, images, domain, and form rules?' if english else 'Quantas landing pages serão entregues e o cliente fornecerá layout, textos, imagens, domínio e regras dos formulários?')
+        tagged.append(('landing_pages', 'How many landing pages are required, and will the client provide the layout, copy, images, domain, and form rules?' if english else 'Quantas landing pages serão entregues e o cliente fornecerá layout, textos, imagens, domínio e regras dos formulários?'))
     elif re.search(r'site profissional|website|business site', text) and not re.search(r'\b\d+\s+paginas|\b\d+\s+pages|pagina unica|single page|layout aprovado|approved layout', text):
-        questions.append('How many pages and sections are in scope, and who will provide the layout, copy, images, and forms?' if english else 'Quantas páginas e seções entram no site e quem fornecerá layout, textos, imagens e formulários?')
+        tagged.append(('site_pages', 'How many pages and sections are in scope, and who will provide the layout, copy, images, and forms?' if english else 'Quantas páginas e seções entram no site e quem fornecerá layout, textos, imagens e formulários?'))
     if re.search(r'libras|lora|comfyui|android|\bios\b', text):
-        questions.append('We need to confirm the required experience in this specialty before committing to the scope.' if english else 'Precisamos confirmar internamente a experiência necessária nessa especialidade.')
+        tagged.append(('specialty', 'We need to confirm the required experience in this specialty before committing to the scope.' if english else 'Precisamos confirmar internamente a experiência necessária nessa especialidade.'))
     if re.search(r'\bsem\b|no need|not include|already exists|already done|just fix|nao precisa|nao incluir|ja existe|ja esta pronto|apenas corrigir', text):
-        questions.append('Which parts are already complete, and which deliverables should remain outside the estimate?' if english else 'Quais partes já estão prontas e quais entregas devem ficar fora do orçamento?')
+        tagged.append(('excluded_parts', 'Which parts are already complete, and which deliverables should remain outside the estimate?' if english else 'Quais partes já estão prontas e quais entregas devem ficar fora do orçamento?'))
     quantities = re.findall(r'\b(\d+)\s+(?:telas|pages|paginas|screens|landing pages|integracoes|integrations|endpoints|usuarios|users|produtos|products)\b', text)
     if any(int(value) > 3 for value in quantities):
-        questions.append('Can we detail the screens, integrations, and volumes so each deliverable can be estimated accurately?' if english else 'Podemos detalhar as telas, integrações e volumes para estimar cada entrega?')
+        tagged.append(('volumes', 'Can we detail the screens, integrations, and volumes so each deliverable can be estimated accurately?' if english else 'Podemos detalhar as telas, integrações e volumes para estimar cada entrega?'))
     blocked = snapshot.get('has_gold_badge') is True or snapshot.get('is_premium') is True
     excluded = [term for term in profile.excluded_jobs
                 if re.search(r'(?<!\w)' + re.escape(normalized(term)) + r'(?!\w)', text)]
@@ -218,96 +243,52 @@ def build_quote(snapshot, profile, settings=None):
     totals = [round(p / (1 - settings['fee_fraction']), 2) for p in prices] if prices else None
     budget = snapshot.get('budget_max')
     if isinstance(budget, (int, float)) and totals and budget < totals[0]:
-        questions.append('Would the budget allow a smaller first milestone or an adjustment to the scope?' if english else 'O orçamento permite reduzir o escopo para uma primeira etapa ou ajustar o valor?')
+        tagged.append(('budget', 'Would the budget allow a smaller first milestone or an adjustment to the scope?' if english else 'O orçamento permite reduzir o escopo para uma primeira etapa ou ajustar o valor?'))
     deadline = snapshot.get('deadline_days')
     if isinstance(deadline, (int, float)) and days and deadline < days[1]:
-        questions.append('Is there flexibility in the deadline, or should we prioritize a smaller first delivery?' if english else 'Há flexibilidade no prazo ou podemos priorizar uma entrega menor?')
+        tagged.append(('deadline', 'Is there flexibility in the deadline, or should we prioritize a smaller first delivery?' if english else 'Há flexibilidade no prazo ou podemos priorizar uma entrega menor?'))
     advisory = commercial_advisories(snapshot, settings, high, initial_price)
     if 'off_platform_contact' in advisory['risk_ids']:
         return dict(action='skip', reason='Pedido de contato fora da plataforma exige revisão manual.',
                     suggested_price=None, estimated_days=None, questions=[], breakdown=tasks,
                     knowledge=advisory)
+    questions = [question for _, question in tagged]
     action = 'question' if questions else 'proposal'
+    client_questions = copywriting.prioritized_questions(tagged)
+    if action == 'question' and not client_questions:
+        client_questions = [scope_question(english)]
     client = ' '.join(str(snapshot.get('client', '')).split())[:80]
     team = str(getattr(profile, 'team_description', '') or '').strip()
     if english:
         team = team or 'two-developer full-stack team'
-        greeting = f'Hi {client},' if client else 'Hi,'
-        opening = f'{greeting} We are a {team} working together, and we are interested in the project "{title}".'
-        question = (opening + ' ' + ' '.join(questions) +
-                    ' Once these details are confirmed, we can agree on a fair price based on the scope and priorities. '
-                    'The price is negotiable, and paid APIs, hosting, domains, and services remain in the client account.')
+        greeting = f'Hi {client}!' if client else 'Hi!'
     else:
         if 'dois desenvolvedores full stack' not in normalized(team):
             team = 'equipe de dois desenvolvedores full stack'
         greeting = f'Olá, {client}!' if client else 'Olá!'
-        opening = (f'{greeting} Somos uma {team} que trabalham juntos e temos interesse '
-                   f'no projeto “{title}”.')
-        question = (opening + ' ' + ' '.join(questions) +
-                    ' Depois desses detalhes, o valor é a combinar conforme o escopo e as prioridades; '
-                    'podemos combinar um valor justo. '
-                    'Custos de APIs, hospedagem e serviços pagos ficam nas contas do cliente.')
-    scope = '; '.join(t['deliverable'] for t in tasks[:5])
-    if english:
-        message = (opening + f' We understand the delivery includes {scope}. '
-                   'We propose working in verifiable milestones covering requirements, implementation, testing, and documented handoff. '
-                   'We will validate the main workflows and agree on acceptance criteria before starting. '
-                   'The timeline begins after access, materials, and scope confirmation are available. '
-                   'New functionality can be estimated separately. '
-                   'Our proposal covers development and configuration; paid APIs, hosting, domains, and services remain in the client account.')
-    else:
-        message = (opening + f' Entendemos que a entrega envolve {scope}. '
-                   'Propomos executar em etapas verificáveis: alinhamento dos requisitos, implementação, testes e entrega documentada. '
-                   'Validamos os fluxos principais e combinamos os critérios de aceite antes de iniciar. '
-                   'O prazo começa após recebermos os acessos, materiais e a confirmação do escopo. '
-                   'Novas funcionalidades são orçadas separadamente. '
-                   'Nossa proposta cobre desenvolvimento e configuração; APIs, hospedagem, domínio e serviços pagos ficam nas contas do cliente.')
-    if action == 'proposal':
-        if english:
-            message += (f' As an initial proposal for this scope, we estimate {format_money(initial_price, currency)} and up to '
-                        f'{initial_days} calendar days, including testing and one revision round. This is an initial estimate; '
-                        'the price is negotiable based on the final details, scope, and priorities. '
-                        'We can align the milestones and adjust the proposal here on Upwork.')
-        else:
-            message += (f' Como proposta inicial para esse escopo, indicamos {format_money(initial_price, currency)} e prazo de até '
-                        f'{initial_days} dias corridos, incluindo testes e uma rodada de revisão. Esse é um valor de '
-                        'referência. O valor pode ser combinado e o preço pode ser negociado conforme os detalhes finais, '
-                        'o escopo e as prioridades '
-                        'do projeto. Se fizer sentido, podemos alinhar as etapas e ajustar a proposta aqui pela plataforma.')
-    fallback_scope = scope or ('service analysis, implementation, testing, and documented handoff' if english else 'análise do serviço, implementação, testes e entrega documentada')
-    if prices:
-        if english:
-            fallback_message = (opening + f' Based on the described service, we would initially scope {fallback_scope}. '
-                                f'Our preliminary estimate is {format_money(initial_price, currency)}, with up to {initial_days} calendar days. '
-                                'The price is negotiable after confirming the final details, priorities, and acceptance criteria. '
-                                'We can split the work into verifiable milestones with implementation, testing, and documentation. '
-                                'Paid APIs, hosting, domains, and services remain in the client account.')
-        else:
-            fallback_message = (opening + f' Pelo serviço descrito, consideramos inicialmente {fallback_scope}. '
-                                f'Com base nessas entregas, nossa estimativa preliminar é de {format_money(initial_price, currency)}, '
-                                f'com prazo de até {initial_days} dias corridos. O preço pode ser negociado conforme os '
-                                'detalhes finais, prioridades e critérios de aceite; depois de confirmar o escopo, '
-                                'ajustamos a proposta. Somos flexíveis para dividir a entrega em etapas verificáveis, '
-                                'com implementação, testes e documentação. APIs, hospedagem, domínio e serviços pagos '
-                                'ficam nas contas do cliente.')
-    else:
-        if english:
-            fallback_message = (opening + ' We would like to understand the functionality, inputs, outputs, and acceptance '
-                                'criteria before finalizing the scope. The price is negotiable after confirmation, and we can '
-                                'organize the work into verifiable milestones with implementation, testing, and documentation. '
-                                'Paid APIs, hosting, domains, and services remain in the client account.')
-        else:
-            fallback_message = (opening + ' Queremos entender melhor as funcionalidades, entradas, saídas e critérios '
-                                'de aceite antes de fechar o escopo. O preço pode ser negociado depois dessa confirmação, '
-                                'e podemos organizar a entrega em etapas verificáveis com implementação, testes e '
-                                'documentação. APIs, hospedagem, domínio e serviços pagos ficam nas contas do cliente.')
+    scope = copywriting.join_list([t['deliverable'] for t in tasks[:min(len(task_names), 4)]], 'and' if english else 'e')
+    seed = snapshot.get('url') or f"{snapshot.get('platform', '')}|{title}"
+    style = copywriting.choose_style(seed, snapshot.get('style_stats'), snapshot.get('proposal_style'))
+    platform_label = PLATFORM_LABELS.get(str(snapshot.get('platform') or '').lower(), 'the platform' if english else 'a plataforma')
+    copy = copywriting.compose(
+        english=english, style=style, greeting=greeting, title=title, team=team, task_names=task_names,
+        technologies=mentioned_technologies(text, profile), scope=scope, questions=client_questions,
+        price_text=format_money(initial_price, currency) if initial_price else None, days=initial_days,
+        platform_label=platform_label if english else 'a plataforma',
+        portfolio_line=copywriting.portfolio_sentence(getattr(profile, 'portfolio', []), text, english),
+    )
+    message = (copy['direct'] or copy['question']) if action == 'proposal' else copy['question']
+    question = copy['question']
+    fallback_message = copy['fallback']
     return dict(action=action, subject=f'Proposal: {title}' if english else f'Proposta: {title}', message=message, question=question,
                 suggested_price=initial_price if prices and action == 'proposal' else None,
                 fallback_message=fallback_message, fallback_price=initial_price,
                 estimated_days=initial_days if action == 'proposal' else None,
                 fallback_days=initial_days,
+                direct_message=copy['direct'], template_variant=copy['style'],
                 estimated_hours=high, hours_range=[low, high], price_range=prices,
-                client_total_range=totals, days_range=days, questions=questions, breakdown=tasks,
+                client_total_range=totals, days_range=days, questions=questions,
+                client_questions=client_questions, breakdown=tasks,
                 assumptions=settings, knowledge=advisory,
                 estimate_type='preliminar por regras; referências de mercado são apenas sanity check',
                 currency=currency,

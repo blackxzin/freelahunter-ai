@@ -20,6 +20,14 @@ experience:
       duplicate-send protection, rate limits and a pause circuit.
     technologies: [Python, JavaScript, Playwright, SQLite, FastAPI, Docker, Git]
 education: ""
+# Para citar um projeto na proposta, marque `cite: true` e informe `keywords`
+# (e opcionalmente `url` https). Ele só aparece quando ao menos 2 termos de
+# keywords/technologies estão na vaga. Use apenas projetos reais.
+#   - title: Portal de pedidos integrado ao ERP
+#     cite: true
+#     keywords: [erp, pedidos, integração]
+#     technologies: [Python, FastAPI]
+#     url: https://exemplo.com/case
 portfolio:
   - title: FreelaHunter — Freelance workflow automation
     role: Full-Stack Developer

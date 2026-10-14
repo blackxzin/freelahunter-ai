@@ -16,7 +16,8 @@ def test_vague_scope_gets_question_without_binding_amount():
     assert result['estimated_days'] is None
     assert result['price_range'][0] > 700
     assert 'podemos combinar um valor justo' in result['question']
-    assert 'equipe de dois desenvolvedores full stack que trabalham juntos' in result['question']
+    assert 'equipe de dois desenvolvedores full stack' in result['question']
+    assert 'que trabalham juntos' not in result['question']
 
 
 def test_complex_scope_takes_more_time_than_landing_page():
@@ -48,8 +49,9 @@ def test_proposal_has_no_fabricated_experience_and_has_negotiation():
     result = quote('Landing page', description)
     assert result['action'] == 'proposal'
     assert result['estimated_days'] > 1
-    assert 'O valor pode ser combinado' in result['message']
-    assert 'equipe de dois desenvolvedores full stack que trabalham juntos' in result['message']
+    assert 'preço pode ser negociado' in result['message']
+    assert 'equipe de dois desenvolvedores full stack' in result['message']
+    assert 'que trabalham juntos' not in result['message']
     assert f"R$ {result['suggested_price']:,.2f}".replace(',', '_').replace('.', ',').replace('_', '.') in result['message']
     assert f"prazo de até {result['estimated_days']} dias" in result['message']
     assert 'contas do cliente' in result['message']
